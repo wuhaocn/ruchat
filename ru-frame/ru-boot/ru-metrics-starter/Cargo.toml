@@ -1,0 +1,16 @@
+[package]
+name = "ru-metrics-starter"
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+prometheus = "0.13.0"
+tokio = { version = "1.30", features = ["full"] }
+sysinfo = "0.32.0"
+warp = "0.3"
+
+
+
+

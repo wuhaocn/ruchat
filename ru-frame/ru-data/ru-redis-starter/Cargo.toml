@@ -1,0 +1,10 @@
+[package]
+name = "ru-redis-starter"
+description = "rust start"
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
+
+
+[dependencies]

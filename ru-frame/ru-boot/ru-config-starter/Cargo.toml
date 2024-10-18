@@ -1,0 +1,9 @@
+[package]
+name = "ru-config-starter"
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
+
+
+[dependencies]

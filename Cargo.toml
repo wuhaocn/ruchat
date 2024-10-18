@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = [
+    "ru-frame/ru-boot/ru-boot-starter",
+    "ru-frame/ru-boot/ru-config-starter",
+    "ru-frame/ru-boot/ru-metrics-starter",
+    "ru-frame/ru-data/ru-mysql-starter",
+    "ru-frame/ru-data/ru-redis-starter",
+    "ru-frame/ru-protocol/ru-mqtt-starter",
+    "ru-app/ru-api-server",
+    "ru-app/ru-api-user",
+    "ru-app/ru-web-console",
+    "example/ru-frame-example/ru-boot-example",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+authors = ["wuhao"]
+repository = "https://github.com/wuhaocn/ruchat"
+
+[workspace.dependencies]
+log = "0.4"
