@@ -6,6 +6,11 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
+actix-web = "4.0"  # 确保与 actix-rt 兼容
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+
+[dev-dependencies]
+actix-rt = "2.5"  # 确保版本兼容

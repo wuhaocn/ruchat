@@ -1,0 +1,190 @@
+openapi: 3.0.0
+info:
+  title: Metadata CRUD API
+  version: 1.0.0
+paths:
+  /users/metadata:
+    get:
+      summary: Get all user metadata
+      responses:
+        '200':
+          description: A list of user metadata
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    name:
+                      type: string
+                    value:
+                      type: string
+    post:
+      summary: Create new user metadata
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                value:
+                  type: string
+      responses:
+        '201':
+          description: User metadata created
+  
+  /devices/metadata:
+    get:
+      summary: Get all device metadata
+      responses:
+        '200':
+          description: A list of device metadata
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    name:
+                      type: string
+                    value:
+                      type: string
+    post:
+      summary: Create new device metadata
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                value:
+                  type: string
+      responses:
+        '201':
+          description: Device metadata created
+
+  /groups/metadata:
+    get:
+      summary: Get all group metadata
+      responses:
+        '200':
+          description: A list of group metadata
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    name:
+                      type: string
+                    value:
+                      type: string
+    post:
+      summary: Create new group metadata
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                value:
+                  type: string
+      responses:
+        '201':
+          description: Group metadata created
+
+  /{type}/metadata/{id}:
+    get:
+      summary: Get metadata by ID
+      parameters:
+        - in: path
+          name: type
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: A single metadata item
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+                  value:
+                    type: string
+        '404':
+          description: Metadata not found
+    put:
+      summary: Update metadata by ID
+      parameters:
+        - in: path
+          name: type
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                value:
+                  type: string
+      responses:
+        '200':
+          description: Metadata updated
+        '404':
+          description: Metadata not found
+    delete:
+      summary: Delete metadata by ID
+      parameters:
+        - in: path
+          name: type
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Metadata deleted
+        '404':
+          description: Metadata not found

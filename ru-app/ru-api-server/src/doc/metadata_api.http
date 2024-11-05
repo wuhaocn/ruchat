@@ -1,0 +1,30 @@
+### Get all user metadata
+GET http://localhost:8080/users/metadata
+Accept: application/json
+
+### Create new user metadata
+POST http://localhost:8080/users/metadata
+Content-Type: application/json
+
+{
+  "id": "1",
+  "name": "New User Metadata",
+  "value": "User Value"
+}
+
+### Get metadata by ID
+GET http://localhost:8080/users/metadata/1
+Accept: application/json
+
+### Update metadata by ID
+PUT http://localhost:8080/users/metadata/1
+Content-Type: application/json
+
+{
+  "id": "1",
+  "name": "Updated User Metadata",
+  "value": "Updated Value"
+}
+
+### Delete metadata by ID
+DELETE http://localhost:8080/users/metadata/1
