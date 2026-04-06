@@ -1022,7 +1022,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("ruchat-{prefix}-{unique}.db"))
+        std::env::temp_dir().join(format!("command-plane-{prefix}-{unique}.db"))
     }
 
     fn cleanup_db_files(db_path: &PathBuf) {

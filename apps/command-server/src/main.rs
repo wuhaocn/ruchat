@@ -31,7 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if config.http_bind == config.ws_bind {
         let app = http::router(state);
         println!(
-            "ru-command-server listening on http+ws={}, sqlite={}",
+            "command-plane-server listening on http+ws={}, sqlite={}",
             config.http_bind, config.db_path
         );
 
@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ws_app = http::ws_router(state);
 
         println!(
-            "ru-command-server listening on http={}, ws={}, sqlite={}",
+            "command-plane-server listening on http={}, ws={}, sqlite={}",
             config.http_bind, config.ws_bind, config.db_path
         );
 

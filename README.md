@@ -1,4 +1,4 @@
-# ruchat
+# command-plane
 
 一个用 Rust 实现的 AI 可控远程终端系统。
 
@@ -13,9 +13,9 @@
 
 当前仓库主线只包含 3 个 crate：
 
-- `ru-command-server`：服务端，负责 HTTP bootstrap、WebSocket 会话、任务管理、后台控制台和 SQLite 持久化。
-- `ru-command-client`：部署在目标机器上的客户端，先通过 HTTP 获取地址，再通过 WebSocket 建立单一会话。
-- `ru-command-protocol`：客户端与服务端共享的数据协议，HTTP 控制面用 JSON，WebSocket 内部是 MQTT-like 语义 + Protobuf 载荷。
+- `command-plane-server`：服务端，负责 HTTP bootstrap、WebSocket 会话、任务管理、后台控制台和 SQLite 持久化。
+- `command-plane-client`：部署在目标机器上的客户端，先通过 HTTP 获取地址，再通过 WebSocket 建立单一会话。
+- `command-plane-protocol`：客户端与服务端共享的数据协议，HTTP 控制面用 JSON，WebSocket 内部是 MQTT-like 语义 + Protobuf 载荷。
 
 手工联调可直接参考 [doc/manual-e2e.md](/Users/wuhao/data/ai/ruchat/doc/manual-e2e.md)，日常使用说明可参考 [doc/practical-guide.md](/Users/wuhao/data/ai/ruchat/doc/practical-guide.md)，也可以使用 [scripts/run-server-dev.sh](/Users/wuhao/data/ai/ruchat/scripts/run-server-dev.sh) 和 [scripts/run-client-dev.sh](/Users/wuhao/data/ai/ruchat/scripts/run-client-dev.sh)。
 
@@ -52,12 +52,11 @@
 ## Workspace
 
 ```text
-ru-app/
-  ru-api-server/         # ru-command-server
-  ru-api-user/           # ru-command-client
-ru-frame/
-  ru-protocol/
-    ru-command-protocol/ # 共享协议
+apps/
+  command-server/   # command-plane-server
+  command-client/   # command-plane-client
+crates/
+  command-protocol/ # command-plane-protocol
 ```
 
 当前不在这条主线上的历史实验代码和无关文档已清理，后续新增内容也应直接服务这 3 个 crate。
@@ -66,13 +65,13 @@ ru-frame/
 
 ```bash
 RU_SERVER_BIND=0.0.0.0:18080 \
-RU_SERVER_DB_PATH=./ruchat.db \
+RU_SERVER_DB_PATH=./command-plane.db \
 RU_SERVER_PUBLIC_WS_BASE=ws://127.0.0.1:18080/ws/agents \
 RU_SERVER_SHARED_TOKEN=dev-shared-token \
-cargo run -p ru-command-server
+cargo run -p command-plane-server
 ```
 
-默认监听 `0.0.0.0:18080`，默认 SQLite 文件是当前目录下的 `ruchat.db`。
+默认监听 `0.0.0.0:18080`，默认 SQLite 文件是当前目录下的 `command-plane.db`。
 
 可选环境变量：
 
@@ -95,7 +94,7 @@ RU_SERVER_HTTP_BIND=0.0.0.0:18080 \
 RU_SERVER_WS_BIND=0.0.0.0:18081 \
 RU_SERVER_PUBLIC_WS_BASE=ws://127.0.0.1:18081/ws/agents \
 RU_SERVER_SHARED_TOKEN=dev-shared-token \
-cargo run -p ru-command-server
+cargo run -p command-plane-server
 ```
 
 注意：
@@ -161,7 +160,7 @@ bash scripts/run-client-dev.sh client-config.example.json
 然后运行：
 
 ```bash
-cargo run -p ru-command-client -- client-config.json
+cargo run -p command-plane-client -- client-config.json
 ```
 
 客户端会先带 token 访问 `http://.../api/v1/bootstrap`，然后在 WebSocket `CONNECT` 帧里再次带上同一个 token。
@@ -213,7 +212,7 @@ curl http://127.0.0.1:18080/api/v1/agents
 
 注意：`/api/v1/agents`、`/api/v1/tasks` 这类管理接口现在要求先登录后台控制台并带上 `ru_admin_session` cookie；`/health`、`/api/v1/bootstrap`、`/ws/agents/:agent_id` 不受 admin 登录保护。
 
-客户端真正注册、订阅、任务接收和结果回传都发生在 WebSocket 二进制消息中。传输层帧定义见 [mqtt.rs](/Users/wuhao/data/ai/ruchat/ru-frame/ru-protocol/ru-command-protocol/src/mqtt.rs) 里的 `PbMqttFrame`，业务载荷定义见 [pb.rs](/Users/wuhao/data/ai/ruchat/ru-frame/ru-protocol/ru-command-protocol/src/pb.rs) 里的 `PbAgentPayloadEnvelope` / `PbClientHello` / `PbTaskAssignment` / `PbTaskResult`。
+客户端真正注册、订阅、任务接收和结果回传都发生在 WebSocket 二进制消息中。传输层帧定义见 [mqtt.rs](/Users/wuhao/data/ai/ruchat/crates/command-protocol/src/mqtt.rs) 里的 `PbMqttFrame`，业务载荷定义见 [pb.rs](/Users/wuhao/data/ai/ruchat/crates/command-protocol/src/pb.rs) 里的 `PbAgentPayloadEnvelope` / `PbClientHello` / `PbTaskAssignment` / `PbTaskResult`。
 
 ### 3. 创建执行任务
 

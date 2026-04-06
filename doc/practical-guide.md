@@ -18,11 +18,11 @@
 
 ## 2. 当前主线结构
 
-- `ru-app/ru-api-server`
+- `apps/command-server`
   服务端，负责 HTTP bootstrap、WS 会话、后台控制台、任务调度、SQLite 持久化
-- `ru-app/ru-api-user`
+- `apps/command-client`
   客户端，负责 bootstrap、WS 连接、命令执行、结果回传
-- `ru-frame/ru-protocol/ru-command-protocol`
+- `crates/command-protocol`
   共享协议，负责 HTTP DTO、MQTT-like WS 帧、PB 载荷
 
 ## 3. 协议和端口模型

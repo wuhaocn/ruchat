@@ -13,7 +13,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::new();
 
     println!(
-        "ru-command-client started: agent_id={}, server={}",
+        "command-plane-client started: agent_id={}, server={}",
         config.agent_id, config.server_url
     );
 

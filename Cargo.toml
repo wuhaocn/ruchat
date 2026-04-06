@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-    "ru-app/ru-api-server",
-    "ru-app/ru-api-user",
-    "ru-frame/ru-protocol/ru-command-protocol",
+    "apps/command-server",
+    "apps/command-client",
+    "crates/command-protocol",
 ]
 
 [workspace.package]
@@ -11,7 +11,7 @@ version = "0.0.1"
 edition = "2021"
 license = "MIT"
 authors = ["wuhao"]
-repository = "https://github.com/wuhaocn/ruchat"
+repository = "https://github.com/wuhaocn/command-plane"
 
 [workspace.dependencies]
 log = "0.4"

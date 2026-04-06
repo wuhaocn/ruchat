@@ -21,7 +21,7 @@ impl ServerConfig {
             std::env::var("RU_SERVER_HTTP_BIND").unwrap_or_else(|_| default_bind.clone());
         let ws_bind = std::env::var("RU_SERVER_WS_BIND").unwrap_or_else(|_| http_bind.clone());
         let db_path =
-            std::env::var("RU_SERVER_DB_PATH").unwrap_or_else(|_| "ruchat.db".to_string());
+            std::env::var("RU_SERVER_DB_PATH").unwrap_or_else(|_| "command-plane.db".to_string());
         let heartbeat_interval_secs = std::env::var("RU_SERVER_HEARTBEAT_SECS")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())

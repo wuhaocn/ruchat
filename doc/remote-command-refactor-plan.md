@@ -23,11 +23,11 @@ Future phase:
 
 Only these 3 crates are on the product mainline:
 
-- `/Users/wuhao/data/ai/ruchat/ru-app/ru-api-server`
+- `/Users/wuhao/data/ai/ruchat/apps/command-server`
   Role: bootstrap API, WS session handling, task management, admin console, SQLite persistence.
-- `/Users/wuhao/data/ai/ruchat/ru-app/ru-api-user`
+- `/Users/wuhao/data/ai/ruchat/apps/command-client`
   Role: bootstrap client, WS client, command registration, local execution, result reporting.
-- `/Users/wuhao/data/ai/ruchat/ru-frame/ru-protocol/ru-command-protocol`
+- `/Users/wuhao/data/ai/ruchat/crates/command-protocol`
   Role: shared HTTP DTOs, MQTT-like WS frame definitions, protobuf payloads, topic conventions.
 
 Everything else should be judged by whether it directly supports this mainline.
@@ -105,10 +105,10 @@ Phase 3: prepare for AI control
 
 ## 7. Naming Direction
 
-The next structural cleanup should make directory names match the product language:
+The mainline rename is already completed:
 
-- `ru-app/ru-api-server` -> `apps/command-server`
-- `ru-app/ru-api-user` -> `apps/command-client`
-- `ru-frame/ru-protocol/ru-command-protocol` -> `crates/command-protocol`
+- `apps/command-server`
+- `apps/command-client`
+- `crates/command-protocol`
 
-This is not urgent, but it should happen before the repository grows again.
+Remaining `ru-*` directories are outside the current product mainline and can be deleted or renamed later only if they regain a real purpose.

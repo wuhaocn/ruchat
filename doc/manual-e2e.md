@@ -46,12 +46,12 @@ Recommended local dev settings:
 
 ```bash
 RU_SERVER_BIND=127.0.0.1:18080 \
-RU_SERVER_DB_PATH=./ruchat.db \
+RU_SERVER_DB_PATH=./command-plane.db \
 RU_SERVER_PUBLIC_WS_BASE=ws://127.0.0.1:18080/ws/agents \
 RU_SERVER_SHARED_TOKEN=dev-shared-token \
 RU_ADMIN_USERNAME=admin \
 RU_ADMIN_PASSWORD=admin123 \
-cargo run -p ru-command-server
+cargo run -p command-plane-server
 ```
 
 Or use the helper script:
@@ -83,7 +83,7 @@ The default sample exposes these commands:
 ## 5. Start Client
 
 ```bash
-cargo run -p ru-command-client -- client-config.json
+cargo run -p command-plane-client -- client-config.json
 ```
 
 Expected behavior:

@@ -1,5 +1,5 @@
 [package]
-name = "ru-command-protocol"
+name = "command-plane-protocol"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
