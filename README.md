@@ -17,7 +17,7 @@
 - `command-plane-client`：部署在目标机器上的客户端，先通过 HTTP 获取地址，再通过 WebSocket 建立单一会话。
 - `command-plane-protocol`：客户端与服务端共享的数据协议，HTTP 控制面用 JSON，WebSocket 内部是 MQTT-like 语义 + Protobuf 载荷。
 
-手工联调可直接参考 [doc/manual-e2e.md](/Users/wuhao/data/ai/ruchat/doc/manual-e2e.md)，日常使用说明可参考 [doc/practical-guide.md](/Users/wuhao/data/ai/ruchat/doc/practical-guide.md)，也可以使用 [scripts/run-server-dev.sh](/Users/wuhao/data/ai/ruchat/scripts/run-server-dev.sh) 和 [scripts/run-client-dev.sh](/Users/wuhao/data/ai/ruchat/scripts/run-client-dev.sh)。
+手工联调可直接参考 [doc/manual-e2e.md](/Users/wuhao/data/ai/ruchat/doc/manual-e2e.md)，日常使用说明可参考 [doc/practical-guide.md](/Users/wuhao/data/ai/ruchat/doc/practical-guide.md)，当前能力基线可参考 [doc/capability-baseline.md](/Users/wuhao/data/ai/ruchat/doc/capability-baseline.md)，也可以使用 [scripts/run-server-dev.sh](/Users/wuhao/data/ai/ruchat/scripts/run-server-dev.sh) 和 [scripts/run-client-dev.sh](/Users/wuhao/data/ai/ruchat/scripts/run-client-dev.sh)。
 
 端口模型当前是：
 
@@ -61,12 +61,19 @@ crates/
 
 当前不在这条主线上的历史实验代码和无关文档已清理，后续新增内容也应直接服务这 3 个 crate。
 
+当前建议只保留这些顶层目录：
+
+- `apps/`：服务端与客户端可执行程序
+- `crates/`：共享协议 crate
+- `doc/`：实用文档，当前保留 `manual-e2e.md`、`practical-guide.md` 和 `capability-baseline.md`
+- `scripts/`：本地开发启动脚本
+
 ## 启动服务端
 
 ```bash
 RU_SERVER_BIND=0.0.0.0:18080 \
 RU_SERVER_DB_PATH=./command-plane.db \
-RU_SERVER_PUBLIC_WS_BASE=ws://127.0.0.1:18080/ws/agents \
+RU_SERVER_PUBLIC_WS_BASE=ws://127.0.0.1:18080/ws/nodes \
 RU_SERVER_SHARED_TOKEN=dev-shared-token \
 cargo run -p command-plane-server
 ```
@@ -75,15 +82,15 @@ cargo run -p command-plane-server
 
 可选环境变量：
 
-- `RU_SERVER_PUBLIC_WS_BASE`：bootstrap 返回给客户端的 WebSocket 基地址，例如 `ws://127.0.0.1:18080/ws/agents`
+- `RU_SERVER_PUBLIC_WS_BASE`：bootstrap 返回给客户端的 WebSocket 基地址，例如 `ws://127.0.0.1:18080/ws/nodes`
 - `RU_SERVER_HTTP_BIND`：可选，单独指定 HTTP 控制面监听地址
 - `RU_SERVER_WS_BIND`：可选，单独指定 WS 监听地址
 - `RU_SERVER_HEARTBEAT_SECS`：应用层心跳秒数，默认 `15`
 - `RU_ADMIN_USERNAME`：后台控制台用户名，默认 `admin`
 - `RU_ADMIN_PASSWORD`：后台控制台密码，默认 `admin123`
 - `RU_ADMIN_SESSION_TTL_SECS`：后台登录会话有效期，默认 `28800`
-- `RU_SERVER_SHARED_TOKEN`：所有 agent 共用的静态 token，适合单环境 PoC
-- `RU_SERVER_AGENT_TOKENS_JSON`：按 agent_id 指定 token 的 JSON，例如 `{"node-1":"token-a","node-2":"token-b"}`
+- `RU_SERVER_SHARED_TOKEN`：所有 node 共用的静态 token，适合单环境 PoC
+- `RU_SERVER_NODE_TOKENS_JSON`：按 node_id 指定 token 的 JSON，例如 `{"node-1":"token-a","node-2":"token-b"}`
 
 启动后可直接访问 `http://127.0.0.1:18080/console/login` 进入后台控制台。当前阶段建议直接通过控制台人工下发命令，不再把管理接口当主要操作入口。
 
@@ -92,7 +99,7 @@ cargo run -p command-plane-server
 ```bash
 RU_SERVER_HTTP_BIND=0.0.0.0:18080 \
 RU_SERVER_WS_BIND=0.0.0.0:18081 \
-RU_SERVER_PUBLIC_WS_BASE=ws://127.0.0.1:18081/ws/agents \
+RU_SERVER_PUBLIC_WS_BASE=ws://127.0.0.1:18081/ws/nodes \
 RU_SERVER_SHARED_TOKEN=dev-shared-token \
 cargo run -p command-plane-server
 ```
@@ -123,7 +130,7 @@ bash scripts/run-client-dev.sh client-config.example.json
 
 ```json
 {
-  "agent_id": "node-1",
+  "node_id": "node-1",
   "auth_token": "dev-shared-token",
   "server_url": "http://127.0.0.1:18080",
   "poll_interval_secs": 3,
@@ -170,7 +177,7 @@ cargo run -p command-plane-client -- client-config.json
 - 这里的 MQTT 不是独立 broker/TCP 通道，而是 WebSocket 之上的一层消息语义。
 - 客户端进入 WS 后先发送带鉴权信息的 `CONNECT`，再 `SUBSCRIBE` 自己的 topic，然后通过 `PUBLISH` 收发业务消息。
 - 心跳也走这层语义，连接两端都可以发 `PINGREQ`，对端返回 `PINGRESP`。
-- 当前内置的 topic 约定是 `agents/{agent_id}/hello`、`agents/{agent_id}/task`、`agents/{agent_id}/ack`、`agents/{agent_id}/result`、`agents/{agent_id}/control`。
+- 当前内置的 topic 约定是 `nodes/{node_id}/hello`、`nodes/{node_id}/task`、`nodes/{node_id}/ack`、`nodes/{node_id}/result`、`nodes/{node_id}/control`。
 - `PUBLISH.payload` 中承载的是 Protobuf 业务消息。
 
 ## 当前最小能力
@@ -189,7 +196,7 @@ cargo run -p command-plane-client -- client-config.json
 curl -X POST http://127.0.0.1:18080/api/v1/bootstrap \
   -H 'content-type: application/json' \
   -d '{
-    "agent_id":"node-1",
+    "node_id":"node-1",
     "auth_token":"dev-shared-token"
   }'
 ```
@@ -198,8 +205,8 @@ curl -X POST http://127.0.0.1:18080/api/v1/bootstrap \
 
 ```json
 {
-  "agent_id": "node-1",
-  "ws_url": "ws://127.0.0.1:18080/ws/agents/node-1",
+  "node_id": "node-1",
+  "ws_url": "ws://127.0.0.1:18080/ws/nodes/node-1",
   "heartbeat_interval_secs": 15
 }
 ```
@@ -207,12 +214,12 @@ curl -X POST http://127.0.0.1:18080/api/v1/bootstrap \
 ### 2. 查看已注册客户端
 
 ```bash
-curl http://127.0.0.1:18080/api/v1/agents
+curl http://127.0.0.1:18080/api/v1/nodes
 ```
 
-注意：`/api/v1/agents`、`/api/v1/tasks` 这类管理接口现在要求先登录后台控制台并带上 `ru_admin_session` cookie；`/health`、`/api/v1/bootstrap`、`/ws/agents/:agent_id` 不受 admin 登录保护。
+注意：`/api/v1/nodes`、`/api/v1/tasks` 这类管理接口现在要求先登录后台控制台并带上 `ru_admin_session` cookie；`/health`、`/api/v1/bootstrap`、`/ws/nodes/:node_id` 不受 admin 登录保护。
 
-客户端真正注册、订阅、任务接收和结果回传都发生在 WebSocket 二进制消息中。传输层帧定义见 [mqtt.rs](/Users/wuhao/data/ai/ruchat/crates/command-protocol/src/mqtt.rs) 里的 `PbMqttFrame`，业务载荷定义见 [pb.rs](/Users/wuhao/data/ai/ruchat/crates/command-protocol/src/pb.rs) 里的 `PbAgentPayloadEnvelope` / `PbClientHello` / `PbTaskAssignment` / `PbTaskResult`。
+客户端真正注册、订阅、任务接收和结果回传都发生在 WebSocket 二进制消息中。传输层帧定义见 [mqtt.rs](/Users/wuhao/data/ai/ruchat/crates/command-protocol/src/mqtt.rs) 里的 `PbMqttFrame`，业务载荷定义见 [pb.rs](/Users/wuhao/data/ai/ruchat/crates/command-protocol/src/pb.rs) 里的 `PbNodePayloadEnvelope` / `PbClientHello` / `PbTaskAssignment` / `PbTaskResult`。
 
 ### 3. 创建执行任务
 
@@ -220,14 +227,14 @@ curl http://127.0.0.1:18080/api/v1/agents
 curl -X POST http://127.0.0.1:18080/api/v1/tasks \
   -H 'content-type: application/json' \
   -d '{
-    "agent_id":"node-1",
+    "node_id":"node-1",
     "command_name":"echo",
     "args":["hello","world"],
     "timeout_secs":30
   }'
 ```
 
-任务创建后，如果对应客户端在线，服务端会通过当前 WebSocket 会话里的 `PUBLISH(topic=agents/{agent_id}/task)` 立即推送任务。客户端收到后会先回 `agents/{agent_id}/ack`，服务端再把任务状态切到 `running`。
+任务创建后，如果对应客户端在线，服务端会通过当前 WebSocket 会话里的 `PUBLISH(topic=nodes/{node_id}/task)` 立即推送任务。客户端收到后会先回 `nodes/{node_id}/ack`，服务端再把任务状态切到 `running`。
 
 ### 4. 取消未开始任务
 
@@ -239,7 +246,7 @@ curl -X POST http://127.0.0.1:18080/api/v1/tasks/1/cancel \
   }'
 ```
 
-当前取消支持 `queued`、`dispatched` 和 `running`。当任务已经在客户端执行时，服务端会通过 `agents/{agent_id}/control` 下发 `TaskCancel`，客户端收到后会尝试终止本地子进程。
+当前取消支持 `queued`、`dispatched` 和 `running`。当任务已经在客户端执行时，服务端会通过 `nodes/{node_id}/control` 下发 `TaskCancel`，客户端收到后会尝试终止本地子进程。
 
 ### 5. 查看任务执行结果
 
@@ -252,7 +259,7 @@ curl http://127.0.0.1:18080/api/v1/tasks/1
 
 1. 启动服务端，打开 `http://127.0.0.1:18080/console/login`，用 admin 账号登录。
 2. 启动客户端，客户端会先 bootstrap，再通过 WS 注册自己和支持的命令。
-3. 在控制台 `Agents` 页面查看客户端和其支持命令。
+3. 在控制台 `Nodes` 页面查看客户端和其支持命令。
 4. 进入某个 agent 详情页，选择已上报命令并创建任务。
 5. 在 `Tasks` 页面观察状态从 `queued/dispatched/running` 进入 `succeeded/failed/canceled`，同时查看 stdout/stderr。
 

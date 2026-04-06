@@ -14,3 +14,7 @@ serde_json.workspace = true
 tokio.workspace = true
 ru_command_protocol = { package = "command-plane-protocol", path = "../../crates/command-protocol" }
 rusqlite = "0.31.0"
+
+[dev-dependencies]
+hyper.workspace = true
+tokio-tungstenite.workspace = true

@@ -35,3 +35,11 @@ docs/public
 perf*
 flamegraph.svg
 logs/
+
+# Local SQLite runtime files
+command-plane.db
+command-plane.db-shm
+command-plane.db-wal
+ruchat.db
+ruchat.db-shm
+ruchat.db-wal

@@ -59,7 +59,7 @@
 
 当前控制台已经是一个最小可用工作台。
 
-`/console/agents/:agent_id` 页面：
+`/console/nodes/:node_id` 页面：
 
 - 左侧是执行日志流
   展示最近任务、状态、耗时、stdout/stderr、取消按钮
@@ -103,7 +103,7 @@ bash scripts/run-client-dev.sh client-config.example.json
 1. 启动服务端
 2. 启动客户端
 3. 打开控制台并登录
-4. 进入 `Agents`
+4. 进入 `Nodes`
 5. 点开某个 agent，例如 `node-1`
 6. 在右侧选择命令并发送
 7. 在左侧查看执行日志和输出
@@ -137,7 +137,7 @@ bash scripts/run-client-dev.sh client-config.example.json
 
 客户端配置重点：
 
-- `agent_id`
+- `node_id`
 - `auth_token`
 - `server_url`
 - `commands`

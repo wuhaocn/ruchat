@@ -1,5 +1,5 @@
 use ru_command_protocol::{
-    AgentRegistration, AgentSnapshot, CreateTaskRequest, PendingTask, SubmitTaskResultRequest,
+    CreateTaskRequest, NodeRegistration, NodeSnapshot, PendingTask, SubmitTaskResultRequest,
     TaskSnapshot, TaskStatus,
 };
 use rusqlite::{params, Connection, OptionalExtension};
@@ -13,21 +13,21 @@ pub struct Database {
 }
 
 pub enum CreateTaskOutcome {
-    AgentNotFound,
+    NodeNotFound,
     UnsupportedCommand,
     ExtraArgsNotAllowed,
     Created(TaskSnapshot),
 }
 
 pub enum ClaimTaskOutcome {
-    AgentNotFound,
+    NodeNotFound,
     NoTask,
     Claimed(PendingTask),
 }
 
 pub enum SubmitTaskResultOutcome {
     TaskNotFound,
-    AgentMismatch,
+    NodeMismatch,
     Updated(TaskSnapshot),
 }
 
@@ -75,42 +75,8 @@ impl Database {
         let connection = Connection::open(path)?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
-        connection.execute_batch(
-            "
-            CREATE TABLE IF NOT EXISTS agents (
-                agent_id TEXT PRIMARY KEY,
-                hostname TEXT NOT NULL,
-                platform TEXT NOT NULL,
-                poll_interval_secs INTEGER NOT NULL,
-                registered_at_unix_secs INTEGER NOT NULL,
-                last_seen_unix_secs INTEGER NOT NULL,
-                commands_json TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS tasks (
-                task_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                agent_id TEXT NOT NULL,
-                command_name TEXT NOT NULL,
-                args_json TEXT NOT NULL,
-                status TEXT NOT NULL,
-                created_at_unix_secs INTEGER NOT NULL,
-                dispatched_at_unix_secs INTEGER,
-                acked_at_unix_secs INTEGER,
-                started_at_unix_secs INTEGER,
-                finished_at_unix_secs INTEGER,
-                timeout_secs INTEGER,
-                retry_count INTEGER NOT NULL DEFAULT 0,
-                retry_reason TEXT,
-                canceled_at_unix_secs INTEGER,
-                cancel_reason TEXT,
-                result_json TEXT,
-                FOREIGN KEY(agent_id) REFERENCES agents(agent_id)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_tasks_agent_status_task_id
-            ON tasks (agent_id, status, task_id);
-            ",
-        )?;
+        Self::migrate_legacy_schema(&connection)?;
+        Self::create_schema(&connection)?;
         Self::ensure_task_column(&connection, "dispatched_at_unix_secs", "INTEGER")?;
         Self::ensure_task_column(&connection, "acked_at_unix_secs", "INTEGER")?;
         Self::ensure_task_column(&connection, "timeout_secs", "INTEGER")?;
@@ -124,18 +90,15 @@ impl Database {
         })
     }
 
-    pub fn register_agent(
-        &self,
-        registration: AgentRegistration,
-    ) -> Result<AgentSnapshot, DbError> {
+    pub fn register_node(&self, registration: NodeRegistration) -> Result<NodeSnapshot, DbError> {
         let now = unix_now();
         let commands_json = serde_json::to_string(&registration.commands)?;
         let connection = self.connection.lock().map_err(|_| DbError::LockPoisoned)?;
 
         let registered_at_unix_secs: i64 = connection
             .query_row(
-                "SELECT registered_at_unix_secs FROM agents WHERE agent_id = ?1",
-                params![&registration.agent_id],
+                "SELECT registered_at_unix_secs FROM nodes WHERE node_id = ?1",
+                params![&registration.node_id],
                 |row| row.get(0),
             )
             .optional()?
@@ -143,8 +106,8 @@ impl Database {
 
         connection.execute(
             "
-            INSERT INTO agents (
-                agent_id,
+            INSERT INTO nodes (
+                node_id,
                 hostname,
                 platform,
                 poll_interval_secs,
@@ -152,7 +115,7 @@ impl Database {
                 last_seen_unix_secs,
                 commands_json
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-            ON CONFLICT(agent_id) DO UPDATE SET
+            ON CONFLICT(node_id) DO UPDATE SET
                 hostname = excluded.hostname,
                 platform = excluded.platform,
                 poll_interval_secs = excluded.poll_interval_secs,
@@ -160,7 +123,7 @@ impl Database {
                 commands_json = excluded.commands_json
             ",
             params![
-                &registration.agent_id,
+                &registration.node_id,
                 &registration.hostname,
                 &registration.platform,
                 registration.poll_interval_secs as i64,
@@ -170,48 +133,48 @@ impl Database {
             ],
         )?;
 
-        self.get_agent_inner(&connection, &registration.agent_id)?
-            .ok_or_else(|| DbError::Data("agent disappeared after upsert".to_string()))
+        self.get_node_inner(&connection, &registration.node_id)?
+            .ok_or_else(|| DbError::Data("node disappeared after upsert".to_string()))
     }
 
-    pub fn list_agents(&self) -> Result<Vec<AgentSnapshot>, DbError> {
+    pub fn list_nodes(&self) -> Result<Vec<NodeSnapshot>, DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::LockPoisoned)?;
         let mut statement = connection.prepare(
             "
             SELECT
-                agent_id,
+                node_id,
                 hostname,
                 platform,
                 poll_interval_secs,
                 registered_at_unix_secs,
                 last_seen_unix_secs,
                 commands_json
-            FROM agents
-            ORDER BY agent_id
+            FROM nodes
+            ORDER BY node_id
             ",
         )?;
 
-        let rows = statement.query_map([], |row| self.read_agent(row))?;
-        let mut agents = Vec::new();
+        let rows = statement.query_map([], |row| self.read_node(row))?;
+        let mut nodes = Vec::new();
         for row in rows {
-            agents.push(row?);
+            nodes.push(row?);
         }
-        Ok(agents)
+        Ok(nodes)
     }
 
-    pub fn get_agent(&self, agent_id: &str) -> Result<Option<AgentSnapshot>, DbError> {
+    pub fn get_node(&self, node_id: &str) -> Result<Option<NodeSnapshot>, DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::LockPoisoned)?;
-        self.get_agent_inner(&connection, agent_id)
+        self.get_node_inner(&connection, node_id)
     }
 
     pub fn create_task(&self, request: CreateTaskRequest) -> Result<CreateTaskOutcome, DbError> {
         let now = unix_now();
         let connection = self.connection.lock().map_err(|_| DbError::LockPoisoned)?;
-        let Some(agent) = self.get_agent_inner(&connection, &request.agent_id)? else {
-            return Ok(CreateTaskOutcome::AgentNotFound);
+        let Some(node) = self.get_node_inner(&connection, &request.node_id)? else {
+            return Ok(CreateTaskOutcome::NodeNotFound);
         };
 
-        let Some(command) = agent
+        let Some(command) = node
             .commands
             .iter()
             .find(|item| item.name == request.command_name)
@@ -227,7 +190,7 @@ impl Database {
         connection.execute(
             "
             INSERT INTO tasks (
-                agent_id,
+                node_id,
                 command_name,
                 args_json,
                 status,
@@ -237,7 +200,7 @@ impl Database {
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)
             ",
             params![
-                &request.agent_id,
+                &request.node_id,
                 &request.command_name,
                 args_json,
                 task_status_to_str(TaskStatus::Queued),
@@ -254,13 +217,160 @@ impl Database {
         Ok(CreateTaskOutcome::Created(task))
     }
 
+    fn create_schema(connection: &Connection) -> Result<(), DbError> {
+        connection.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS nodes (
+                node_id TEXT PRIMARY KEY,
+                hostname TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                poll_interval_secs INTEGER NOT NULL,
+                registered_at_unix_secs INTEGER NOT NULL,
+                last_seen_unix_secs INTEGER NOT NULL,
+                commands_json TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS tasks (
+                task_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                node_id TEXT NOT NULL,
+                command_name TEXT NOT NULL,
+                args_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at_unix_secs INTEGER NOT NULL,
+                dispatched_at_unix_secs INTEGER,
+                acked_at_unix_secs INTEGER,
+                started_at_unix_secs INTEGER,
+                finished_at_unix_secs INTEGER,
+                timeout_secs INTEGER,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                retry_reason TEXT,
+                canceled_at_unix_secs INTEGER,
+                cancel_reason TEXT,
+                result_json TEXT,
+                FOREIGN KEY(node_id) REFERENCES nodes(node_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_tasks_node_status_task_id
+            ON tasks (node_id, status, task_id);
+            DROP INDEX IF EXISTS idx_tasks_agent_status_task_id;
+            ",
+        )?;
+        Ok(())
+    }
+
+    fn migrate_legacy_schema(connection: &Connection) -> Result<(), DbError> {
+        let has_agents_table = Self::table_exists(connection, "agents")?;
+        let has_tasks_table = Self::table_exists(connection, "tasks")?;
+        let tasks_has_legacy_agent_id =
+            has_tasks_table && Self::table_has_column(connection, "tasks", "agent_id")?;
+
+        if !has_agents_table && !tasks_has_legacy_agent_id {
+            return Ok(());
+        }
+
+        connection.pragma_update(None, "foreign_keys", "OFF")?;
+        connection.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS nodes (
+                node_id TEXT PRIMARY KEY,
+                hostname TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                poll_interval_secs INTEGER NOT NULL,
+                registered_at_unix_secs INTEGER NOT NULL,
+                last_seen_unix_secs INTEGER NOT NULL,
+                commands_json TEXT NOT NULL
+            );
+            ",
+        )?;
+
+        if has_agents_table {
+            connection.execute(
+                "
+                INSERT OR REPLACE INTO nodes (
+                    node_id,
+                    hostname,
+                    platform,
+                    poll_interval_secs,
+                    registered_at_unix_secs,
+                    last_seen_unix_secs,
+                    commands_json
+                )
+                SELECT
+                    agent_id,
+                    hostname,
+                    platform,
+                    poll_interval_secs,
+                    registered_at_unix_secs,
+                    last_seen_unix_secs,
+                    commands_json
+                FROM agents
+                ",
+                [],
+            )?;
+        }
+
+        if tasks_has_legacy_agent_id {
+            connection.execute("ALTER TABLE tasks RENAME TO tasks_legacy", [])?;
+            Self::create_schema(connection)?;
+            connection.execute(
+                "
+                INSERT INTO tasks (
+                    task_id,
+                    node_id,
+                    command_name,
+                    args_json,
+                    status,
+                    created_at_unix_secs,
+                    dispatched_at_unix_secs,
+                    acked_at_unix_secs,
+                    started_at_unix_secs,
+                    finished_at_unix_secs,
+                    timeout_secs,
+                    retry_count,
+                    retry_reason,
+                    canceled_at_unix_secs,
+                    cancel_reason,
+                    result_json
+                )
+                SELECT
+                    task_id,
+                    agent_id,
+                    command_name,
+                    args_json,
+                    status,
+                    created_at_unix_secs,
+                    dispatched_at_unix_secs,
+                    acked_at_unix_secs,
+                    started_at_unix_secs,
+                    finished_at_unix_secs,
+                    timeout_secs,
+                    retry_count,
+                    retry_reason,
+                    canceled_at_unix_secs,
+                    cancel_reason,
+                    result_json
+                FROM tasks_legacy
+                ",
+                [],
+            )?;
+            connection.execute("DROP TABLE tasks_legacy", [])?;
+        }
+
+        if has_agents_table {
+            connection.execute("DROP TABLE agents", [])?;
+        }
+
+        connection.pragma_update(None, "foreign_keys", "ON")?;
+        Ok(())
+    }
+
     pub fn list_tasks(&self) -> Result<Vec<TaskSnapshot>, DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::LockPoisoned)?;
         let mut statement = connection.prepare(
             "
             SELECT
                 task_id,
-                agent_id,
+                node_id,
                 command_name,
                 args_json,
                 status,
@@ -288,9 +398,9 @@ impl Database {
         Ok(tasks)
     }
 
-    pub fn list_tasks_for_agent(
+    pub fn list_tasks_for_node(
         &self,
-        agent_id: &str,
+        node_id: &str,
         limit: usize,
     ) -> Result<Vec<TaskSnapshot>, DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::LockPoisoned)?;
@@ -298,7 +408,7 @@ impl Database {
             "
             SELECT
                 task_id,
-                agent_id,
+                node_id,
                 command_name,
                 args_json,
                 status,
@@ -314,14 +424,14 @@ impl Database {
                 cancel_reason,
                 result_json
             FROM tasks
-            WHERE agent_id = ?1
+            WHERE node_id = ?1
             ORDER BY task_id DESC
             LIMIT ?2
             ",
         )?;
 
         let rows =
-            statement.query_map(params![agent_id, limit as i64], |row| self.read_task(row))?;
+            statement.query_map(params![node_id, limit as i64], |row| self.read_task(row))?;
         let mut tasks = Vec::new();
         for row in rows {
             tasks.push(row?);
@@ -334,7 +444,7 @@ impl Database {
         self.get_task_inner(&connection, task_id)
     }
 
-    pub fn requeue_incomplete_tasks(&self, agent_id: &str, reason: &str) -> Result<(), DbError> {
+    pub fn requeue_incomplete_tasks(&self, node_id: &str, reason: &str) -> Result<(), DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::LockPoisoned)?;
         connection.execute(
             "
@@ -345,14 +455,14 @@ impl Database {
                 started_at_unix_secs = NULL
                 ,retry_count = retry_count + 1
                 ,retry_reason = ?2
-            WHERE agent_id = ?3
+            WHERE node_id = ?3
               AND status IN (?4, ?5)
               AND finished_at_unix_secs IS NULL
             ",
             params![
                 task_status_to_str(TaskStatus::Queued),
                 reason,
-                agent_id,
+                node_id,
                 task_status_to_str(TaskStatus::Dispatched),
                 task_status_to_str(TaskStatus::Running)
             ],
@@ -360,18 +470,18 @@ impl Database {
         Ok(())
     }
 
-    pub fn claim_task(&self, agent_id: &str) -> Result<ClaimTaskOutcome, DbError> {
+    pub fn claim_task(&self, node_id: &str) -> Result<ClaimTaskOutcome, DbError> {
         let now = unix_now();
         let mut connection = self.connection.lock().map_err(|_| DbError::LockPoisoned)?;
         let transaction = connection.transaction()?;
 
         let updated = transaction.execute(
-            "UPDATE agents SET last_seen_unix_secs = ?1 WHERE agent_id = ?2",
-            params![now as i64, agent_id],
+            "UPDATE nodes SET last_seen_unix_secs = ?1 WHERE node_id = ?2",
+            params![now as i64, node_id],
         )?;
         if updated == 0 {
             transaction.rollback()?;
-            return Ok(ClaimTaskOutcome::AgentNotFound);
+            return Ok(ClaimTaskOutcome::NodeNotFound);
         }
 
         let pending = {
@@ -379,14 +489,14 @@ impl Database {
                 "
                 SELECT
                     task_id,
-                    agent_id,
+                    node_id,
                     command_name,
                     args_json,
                     created_at_unix_secs,
                     timeout_secs,
                     retry_count
                 FROM tasks
-                WHERE agent_id = ?1 AND status = ?2
+                WHERE node_id = ?1 AND status = ?2
                 ORDER BY task_id
                 LIMIT 1
                 ",
@@ -394,7 +504,7 @@ impl Database {
 
             statement
                 .query_row(
-                    params![agent_id, task_status_to_str(TaskStatus::Queued)],
+                    params![node_id, task_status_to_str(TaskStatus::Queued)],
                     |row| {
                         let args_json: String = row.get(3)?;
                         let args: Vec<String> =
@@ -408,7 +518,7 @@ impl Database {
 
                         Ok(PendingTask {
                             task_id: row.get::<_, i64>(0)? as u64,
-                            agent_id: row.get(1)?,
+                            node_id: row.get(1)?,
                             command_name: row.get(2)?,
                             args,
                             created_at_unix_secs: row.get::<_, i64>(4)? as u64,
@@ -452,7 +562,7 @@ impl Database {
     pub fn acknowledge_task(
         &self,
         task_id: u64,
-        agent_id: &str,
+        node_id: &str,
     ) -> Result<Option<TaskSnapshot>, DbError> {
         let now = unix_now();
         let connection = self.connection.lock().map_err(|_| DbError::LockPoisoned)?;
@@ -466,14 +576,14 @@ impl Database {
                     ELSE started_at_unix_secs
                 END
             WHERE task_id = ?3
-              AND agent_id = ?4
+              AND node_id = ?4
               AND status = ?5
             ",
             params![
                 task_status_to_str(TaskStatus::Running),
                 now as i64,
                 task_id as i64,
-                agent_id,
+                node_id,
                 task_status_to_str(TaskStatus::Dispatched)
             ],
         )?;
@@ -488,7 +598,7 @@ impl Database {
     pub fn retry_task(
         &self,
         task_id: u64,
-        agent_id: &str,
+        node_id: &str,
         reason: &str,
     ) -> Result<Option<TaskSnapshot>, DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::LockPoisoned)?;
@@ -506,14 +616,14 @@ impl Database {
                 retry_count = retry_count + 1,
                 retry_reason = ?2
             WHERE task_id = ?3
-              AND agent_id = ?4
+              AND node_id = ?4
               AND status IN (?5, ?6)
             ",
             params![
                 task_status_to_str(TaskStatus::Queued),
                 reason,
                 task_id as i64,
-                agent_id,
+                node_id,
                 task_status_to_str(TaskStatus::Dispatched),
                 task_status_to_str(TaskStatus::Running)
             ],
@@ -538,20 +648,20 @@ impl Database {
 
         let task_row: Option<(String, String)> = transaction
             .query_row(
-                "SELECT agent_id, status FROM tasks WHERE task_id = ?1",
+                "SELECT node_id, status FROM tasks WHERE task_id = ?1",
                 params![task_id as i64],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
 
-        let Some((task_agent_id, task_status)) = task_row else {
+        let Some((task_node_id, task_status)) = task_row else {
             transaction.rollback()?;
             return Ok(SubmitTaskResultOutcome::TaskNotFound);
         };
 
-        if task_agent_id != request.agent_id {
+        if task_node_id != request.node_id {
             transaction.rollback()?;
-            return Ok(SubmitTaskResultOutcome::AgentMismatch);
+            return Ok(SubmitTaskResultOutcome::NodeMismatch);
         }
 
         if !matches!(
@@ -648,30 +758,30 @@ impl Database {
         Ok(CancelTaskOutcome::Canceled(task))
     }
 
-    fn get_agent_inner(
+    fn get_node_inner(
         &self,
         connection: &Connection,
-        agent_id: &str,
-    ) -> Result<Option<AgentSnapshot>, DbError> {
+        node_id: &str,
+    ) -> Result<Option<NodeSnapshot>, DbError> {
         let mut statement = connection.prepare(
             "
             SELECT
-                agent_id,
+                node_id,
                 hostname,
                 platform,
                 poll_interval_secs,
                 registered_at_unix_secs,
                 last_seen_unix_secs,
                 commands_json
-            FROM agents
-            WHERE agent_id = ?1
+            FROM nodes
+            WHERE node_id = ?1
             ",
         )?;
 
-        let agent = statement
-            .query_row(params![agent_id], |row| self.read_agent(row))
+        let node = statement
+            .query_row(params![node_id], |row| self.read_node(row))
             .optional()?;
-        Ok(agent)
+        Ok(node)
     }
 
     fn get_task_inner(
@@ -683,7 +793,7 @@ impl Database {
             "
             SELECT
                 task_id,
-                agent_id,
+                node_id,
                 command_name,
                 args_json,
                 status,
@@ -709,7 +819,7 @@ impl Database {
         Ok(task)
     }
 
-    fn read_agent(&self, row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentSnapshot> {
+    fn read_node(&self, row: &rusqlite::Row<'_>) -> rusqlite::Result<NodeSnapshot> {
         let commands_json: String = row.get(6)?;
         let commands = serde_json::from_str(&commands_json).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
@@ -719,8 +829,8 @@ impl Database {
             )
         })?;
 
-        Ok(AgentSnapshot {
-            agent_id: row.get(0)?,
+        Ok(NodeSnapshot {
+            node_id: row.get(0)?,
             hostname: row.get(1)?,
             platform: row.get(2)?,
             poll_interval_secs: row.get::<_, i64>(3)? as u64,
@@ -755,7 +865,7 @@ impl Database {
 
         Ok(TaskSnapshot {
             task_id: row.get::<_, i64>(0)? as u64,
-            agent_id: row.get(1)?,
+            node_id: row.get(1)?,
             command_name: row.get(2)?,
             args,
             status: task_status_from_str(&status).map_err(|error| {
@@ -799,6 +909,30 @@ impl Database {
         )?;
         Ok(())
     }
+
+    fn table_exists(connection: &Connection, table_name: &str) -> Result<bool, DbError> {
+        Ok(connection
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
+                params![table_name],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
+
+    fn table_has_column(
+        connection: &Connection,
+        table_name: &str,
+        column_name: &str,
+    ) -> Result<bool, DbError> {
+        let mut statement = connection.prepare(&format!("PRAGMA table_info({table_name})"))?;
+        let existing_columns = statement
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(existing_columns.iter().any(|column| column == column_name))
+    }
 }
 
 fn task_status_to_str(status: TaskStatus) -> &'static str {
@@ -837,26 +971,27 @@ mod tests {
         CancelTaskOutcome, ClaimTaskOutcome, CreateTaskOutcome, Database, SubmitTaskResultOutcome,
     };
     use ru_command_protocol::{
-        AgentRegistration, CommandDescriptor, ExecutionResult, SubmitTaskResultRequest, TaskStatus,
+        CommandDescriptor, ExecutionResult, NodeRegistration, SubmitTaskResultRequest, TaskStatus,
     };
+    use rusqlite::{params, Connection};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn persists_agents_and_tasks_across_reopen() {
+    fn persists_nodes_and_tasks_across_reopen() {
         let db_path = unique_db_path("persist");
 
         {
             let database = Database::open(db_path.to_str().unwrap()).unwrap();
-            let agent = database
-                .register_agent(sample_registration("node-persist"))
+            let node = database
+                .register_node(sample_registration("node-persist"))
                 .unwrap();
-            assert_eq!(agent.agent_id, "node-persist");
+            assert_eq!(node.node_id, "node-persist");
 
             let task = match database
                 .create_task(ru_command_protocol::CreateTaskRequest {
-                    agent_id: "node-persist".to_string(),
+                    node_id: "node-persist".to_string(),
                     command_name: "echo".to_string(),
                     args: vec!["hello".to_string()],
                     timeout_secs: Some(30),
@@ -872,13 +1007,13 @@ mod tests {
 
         {
             let database = Database::open(db_path.to_str().unwrap()).unwrap();
-            let agents = database.list_agents().unwrap();
+            let nodes = database.list_nodes().unwrap();
             let tasks = database.list_tasks().unwrap();
 
-            assert_eq!(agents.len(), 1);
-            assert_eq!(agents[0].agent_id, "node-persist");
+            assert_eq!(nodes.len(), 1);
+            assert_eq!(nodes[0].node_id, "node-persist");
             assert_eq!(tasks.len(), 1);
-            assert_eq!(tasks[0].agent_id, "node-persist");
+            assert_eq!(tasks[0].node_id, "node-persist");
             assert_eq!(tasks[0].args, vec!["hello".to_string()]);
             assert_eq!(tasks[0].timeout_secs, Some(30));
         }
@@ -891,12 +1026,12 @@ mod tests {
         let db_path = unique_db_path("task-flow");
         let database = Database::open(db_path.to_str().unwrap()).unwrap();
         database
-            .register_agent(sample_registration("node-flow"))
+            .register_node(sample_registration("node-flow"))
             .unwrap();
 
         let created_task = match database
             .create_task(ru_command_protocol::CreateTaskRequest {
-                agent_id: "node-flow".to_string(),
+                node_id: "node-flow".to_string(),
                 command_name: "echo".to_string(),
                 args: vec!["hello".to_string(), "sqlite".to_string()],
                 timeout_secs: Some(10),
@@ -929,7 +1064,7 @@ mod tests {
             .submit_task_result(
                 claimed.task_id,
                 SubmitTaskResultRequest {
-                    agent_id: "node-flow".to_string(),
+                    node_id: "node-flow".to_string(),
                     result: ExecutionResult {
                         success: true,
                         exit_code: Some(0),
@@ -958,12 +1093,12 @@ mod tests {
         let db_path = unique_db_path("retry-cancel");
         let database = Database::open(db_path.to_str().unwrap()).unwrap();
         database
-            .register_agent(sample_registration("node-retry"))
+            .register_node(sample_registration("node-retry"))
             .unwrap();
 
         let created_task = match database
             .create_task(ru_command_protocol::CreateTaskRequest {
-                agent_id: "node-retry".to_string(),
+                node_id: "node-retry".to_string(),
                 command_name: "echo".to_string(),
                 args: vec![],
                 timeout_secs: Some(5),
@@ -1002,9 +1137,110 @@ mod tests {
         cleanup_db_files(&db_path);
     }
 
-    fn sample_registration(agent_id: &str) -> AgentRegistration {
-        AgentRegistration {
-            agent_id: agent_id.to_string(),
+    #[test]
+    fn migrates_legacy_agents_table_to_nodes() {
+        let db_path = unique_db_path("legacy-schema");
+        {
+            let connection = Connection::open(db_path.to_str().unwrap()).unwrap();
+            connection
+                .execute_batch(
+                    "
+                    CREATE TABLE agents (
+                        agent_id TEXT PRIMARY KEY,
+                        hostname TEXT NOT NULL,
+                        platform TEXT NOT NULL,
+                        poll_interval_secs INTEGER NOT NULL,
+                        registered_at_unix_secs INTEGER NOT NULL,
+                        last_seen_unix_secs INTEGER NOT NULL,
+                        commands_json TEXT NOT NULL
+                    );
+
+                    CREATE TABLE tasks (
+                        task_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        agent_id TEXT NOT NULL,
+                        command_name TEXT NOT NULL,
+                        args_json TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        created_at_unix_secs INTEGER NOT NULL,
+                        dispatched_at_unix_secs INTEGER,
+                        acked_at_unix_secs INTEGER,
+                        started_at_unix_secs INTEGER,
+                        finished_at_unix_secs INTEGER,
+                        timeout_secs INTEGER,
+                        retry_count INTEGER NOT NULL DEFAULT 0,
+                        retry_reason TEXT,
+                        canceled_at_unix_secs INTEGER,
+                        cancel_reason TEXT,
+                        result_json TEXT
+                    );
+                    ",
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "
+                    INSERT INTO agents (
+                        agent_id,
+                        hostname,
+                        platform,
+                        poll_interval_secs,
+                        registered_at_unix_secs,
+                        last_seen_unix_secs,
+                        commands_json
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                    ",
+                    params![
+                        "node-legacy",
+                        "legacy-host",
+                        "darwin-arm64",
+                        3_i64,
+                        10_i64,
+                        20_i64,
+                        serde_json::to_string(&sample_registration("node-legacy").commands)
+                            .unwrap()
+                    ],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "
+                    INSERT INTO tasks (
+                        task_id,
+                        agent_id,
+                        command_name,
+                        args_json,
+                        status,
+                        created_at_unix_secs,
+                        retry_count
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                    ",
+                    params![
+                        1_i64,
+                        "node-legacy",
+                        "echo",
+                        "[\"hello\"]",
+                        "queued",
+                        11_i64,
+                        0_i64
+                    ],
+                )
+                .unwrap();
+        }
+
+        let database = Database::open(db_path.to_str().unwrap()).unwrap();
+        let nodes = database.list_nodes().unwrap();
+        let tasks = database.list_tasks().unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].node_id, "node-legacy");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].node_id, "node-legacy");
+
+        cleanup_db_files(&db_path);
+    }
+
+    fn sample_registration(node_id: &str) -> NodeRegistration {
+        NodeRegistration {
+            node_id: node_id.to_string(),
             hostname: "test-host".to_string(),
             platform: "test-platform".to_string(),
             poll_interval_secs: 3,

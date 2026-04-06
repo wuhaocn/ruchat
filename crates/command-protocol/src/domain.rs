@@ -11,8 +11,8 @@ pub struct CommandDescriptor {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentRegistration {
-    pub agent_id: String,
+pub struct NodeRegistration {
+    pub node_id: String,
     pub hostname: String,
     pub platform: String,
     pub poll_interval_secs: u64,
@@ -21,8 +21,8 @@ pub struct AgentRegistration {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentSnapshot {
-    pub agent_id: String,
+pub struct NodeSnapshot {
+    pub node_id: String,
     pub hostname: String,
     pub platform: String,
     pub poll_interval_secs: u64,
@@ -34,7 +34,7 @@ pub struct AgentSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateTaskRequest {
-    pub agent_id: String,
+    pub node_id: String,
     pub command_name: String,
     #[serde(default)]
     pub args: Vec<String>,
@@ -50,7 +50,7 @@ pub struct CancelTaskRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingTask {
     pub task_id: u64,
-    pub agent_id: String,
+    pub node_id: String,
     pub command_name: String,
     #[serde(default)]
     pub args: Vec<String>,
@@ -82,14 +82,14 @@ pub struct ExecutionResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubmitTaskResultRequest {
-    pub agent_id: String,
+    pub node_id: String,
     pub result: ExecutionResult,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskSnapshot {
     pub task_id: u64,
-    pub agent_id: String,
+    pub node_id: String,
     pub command_name: String,
     #[serde(default)]
     pub args: Vec<String>,

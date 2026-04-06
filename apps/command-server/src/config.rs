@@ -10,7 +10,7 @@ pub(crate) struct ServerConfig {
     pub(crate) admin_password: String,
     pub(crate) admin_session_ttl_secs: u64,
     pub(crate) shared_token: Option<String>,
-    pub(crate) agent_tokens: HashMap<String, String>,
+    pub(crate) node_tokens: HashMap<String, String>,
 }
 
 impl ServerConfig {
@@ -36,7 +36,9 @@ impl ServerConfig {
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(8 * 60 * 60);
         let shared_token = std::env::var("RU_SERVER_SHARED_TOKEN").ok();
-        let agent_tokens = match std::env::var("RU_SERVER_AGENT_TOKENS_JSON") {
+        let node_tokens = match std::env::var("RU_SERVER_NODE_TOKENS_JSON")
+            .or_else(|_| std::env::var("RU_SERVER_AGENT_TOKENS_JSON"))
+        {
             Ok(value) => serde_json::from_str::<HashMap<String, String>>(&value)?,
             Err(_) => HashMap::new(),
         };
@@ -51,7 +53,7 @@ impl ServerConfig {
             admin_password,
             admin_session_ttl_secs,
             shared_token,
-            agent_tokens,
+            node_tokens,
         })
     }
 }
@@ -75,6 +77,7 @@ mod tests {
         "RU_ADMIN_PASSWORD",
         "RU_ADMIN_SESSION_TTL_SECS",
         "RU_SERVER_SHARED_TOKEN",
+        "RU_SERVER_NODE_TOKENS_JSON",
         "RU_SERVER_AGENT_TOKENS_JSON",
     ];
 
@@ -100,7 +103,7 @@ mod tests {
         std::env::set_var("RU_SERVER_SHARED_TOKEN", "dev-shared-token");
         std::env::set_var("RU_SERVER_HTTP_BIND", "127.0.0.1:18080");
         std::env::set_var("RU_SERVER_WS_BIND", "127.0.0.1:18081");
-        std::env::set_var("RU_SERVER_PUBLIC_WS_BASE", "ws://127.0.0.1:18081/ws/agents");
+        std::env::set_var("RU_SERVER_PUBLIC_WS_BASE", "ws://127.0.0.1:18081/ws/nodes");
 
         let config = ServerConfig::from_env().unwrap();
 
@@ -108,7 +111,7 @@ mod tests {
         assert_eq!(config.ws_bind, "127.0.0.1:18081");
         assert_eq!(
             config.public_ws_base.as_deref(),
-            Some("ws://127.0.0.1:18081/ws/agents")
+            Some("ws://127.0.0.1:18081/ws/nodes")
         );
     }
 

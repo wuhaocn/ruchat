@@ -1,4 +1,4 @@
-use ru_command_protocol::{AgentRegistration, CommandDescriptor};
+use ru_command_protocol::{CommandDescriptor, NodeRegistration};
 use serde::Deserialize;
 use std::env;
 use std::fs;
@@ -16,7 +16,7 @@ pub(crate) struct LocalCommandConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ClientConfig {
-    pub(crate) agent_id: String,
+    pub(crate) node_id: String,
     pub(crate) auth_token: String,
     pub(crate) server_url: String,
     pub(crate) poll_interval_secs: u64,
@@ -34,9 +34,9 @@ impl ClientConfig {
         Ok(serde_json::from_str(&config_raw)?)
     }
 
-    pub(crate) fn registration(&self) -> AgentRegistration {
-        AgentRegistration {
-            agent_id: self.agent_id.clone(),
+    pub(crate) fn registration(&self) -> NodeRegistration {
+        NodeRegistration {
+            node_id: self.node_id.clone(),
             hostname: hostname(),
             platform: format!("{}-{}", env::consts::OS, env::consts::ARCH),
             poll_interval_secs: self.poll_interval_secs,

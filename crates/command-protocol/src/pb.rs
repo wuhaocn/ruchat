@@ -15,7 +15,7 @@ pub struct PbCommandDescriptor {
 #[derive(Clone, PartialEq, Message)]
 pub struct PbClientHello {
     #[prost(string, tag = "1")]
-    pub agent_id: String,
+    pub node_id: String,
     #[prost(string, tag = "2")]
     pub hostname: String,
     #[prost(string, tag = "3")]
@@ -75,20 +75,20 @@ pub struct PbTaskResult {
 }
 
 #[derive(Clone, PartialEq, Message)]
-pub struct PbAgentError {
+pub struct PbNodeError {
     #[prost(string, tag = "1")]
     pub message: String,
 }
 
 #[derive(Clone, PartialEq, Message)]
-pub struct PbAgentPayloadEnvelope {
-    #[prost(oneof = "pb_agent_payload_envelope::Body", tags = "1, 2, 3, 4, 5, 6")]
-    pub body: Option<pb_agent_payload_envelope::Body>,
+pub struct PbNodePayloadEnvelope {
+    #[prost(oneof = "pb_node_payload_envelope::Body", tags = "1, 2, 3, 4, 5, 6")]
+    pub body: Option<pb_node_payload_envelope::Body>,
 }
 
-pub mod pb_agent_payload_envelope {
+pub mod pb_node_payload_envelope {
     use super::{
-        PbAgentError, PbClientHello, PbTaskAck, PbTaskAssignment, PbTaskCancel, PbTaskResult,
+        PbClientHello, PbNodeError, PbTaskAck, PbTaskAssignment, PbTaskCancel, PbTaskResult,
     };
     use prost::Oneof;
 
@@ -105,6 +105,6 @@ pub mod pb_agent_payload_envelope {
         #[prost(message, tag = "5")]
         TaskCancel(PbTaskCancel),
         #[prost(message, tag = "6")]
-        Error(PbAgentError),
+        Error(PbNodeError),
     }
 }

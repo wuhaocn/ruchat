@@ -7,8 +7,8 @@ mod pb;
 mod topic;
 
 pub use domain::{
-    AgentRegistration, AgentSnapshot, CancelTaskRequest, CommandDescriptor, CreateTaskRequest,
-    ExecutionResult, PendingTask, SubmitTaskResultRequest, TaskSnapshot, TaskStatus,
+    CancelTaskRequest, CommandDescriptor, CreateTaskRequest, ExecutionResult, NodeRegistration,
+    NodeSnapshot, PendingTask, SubmitTaskResultRequest, TaskSnapshot, TaskStatus,
 };
 pub use http::{BootstrapRequest, BootstrapResponse};
 pub use mqtt::{
@@ -16,9 +16,9 @@ pub use mqtt::{
     PbMqttPublish, PbMqttSubAck, PbMqttSubscribe,
 };
 pub use pb::{
-    pb_agent_payload_envelope, PbAgentError, PbAgentPayloadEnvelope, PbClientHello,
-    PbCommandDescriptor, PbTaskAck, PbTaskAssignment, PbTaskCancel, PbTaskResult,
+    pb_node_payload_envelope, PbClientHello, PbCommandDescriptor, PbNodeError,
+    PbNodePayloadEnvelope, PbTaskAck, PbTaskAssignment, PbTaskCancel, PbTaskResult,
 };
 pub use topic::{
-    agent_ack_topic, agent_control_topic, agent_hello_topic, agent_result_topic, agent_task_topic,
+    node_ack_topic, node_control_topic, node_hello_topic, node_result_topic, node_task_topic,
 };

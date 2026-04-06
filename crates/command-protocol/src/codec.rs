@@ -1,5 +1,5 @@
 use crate::mqtt::PbMqttFrame;
-use crate::pb::PbAgentPayloadEnvelope;
+use crate::pb::PbNodePayloadEnvelope;
 use prost::Message;
 
 impl PbMqttFrame {
@@ -12,7 +12,7 @@ impl PbMqttFrame {
     }
 }
 
-impl PbAgentPayloadEnvelope {
+impl PbNodePayloadEnvelope {
     pub fn encode_message(&self) -> Vec<u8> {
         self.encode_to_vec()
     }
@@ -26,13 +26,13 @@ impl PbAgentPayloadEnvelope {
 mod tests {
     use crate::mqtt::pb_mqtt_frame::Body as MqttFrameBody;
     use crate::mqtt::{PbMqttFrame, PbMqttPublish};
-    use crate::topic::agent_task_topic;
+    use crate::topic::node_task_topic;
 
     #[test]
     fn mqtt_frame_roundtrip_preserves_publish_payload() {
         let frame = PbMqttFrame {
             body: Some(MqttFrameBody::Publish(PbMqttPublish {
-                topic: agent_task_topic("node-1"),
+                topic: node_task_topic("node-1"),
                 payload: vec![1, 2, 3, 4],
             })),
         };
@@ -42,7 +42,7 @@ mod tests {
             panic!("expected publish frame");
         };
 
-        assert_eq!(publish.topic, "agents/node-1/task");
+        assert_eq!(publish.topic, "nodes/node-1/task");
         assert_eq!(publish.payload, vec![1, 2, 3, 4]);
     }
 }

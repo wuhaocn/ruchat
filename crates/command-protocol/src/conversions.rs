@@ -1,4 +1,4 @@
-use crate::domain::{AgentRegistration, CommandDescriptor, ExecutionResult, PendingTask};
+use crate::domain::{CommandDescriptor, ExecutionResult, NodeRegistration, PendingTask};
 use crate::pb::{PbClientHello, PbCommandDescriptor, PbTaskAssignment, PbTaskResult};
 
 impl From<&CommandDescriptor> for PbCommandDescriptor {
@@ -23,10 +23,10 @@ impl From<PbCommandDescriptor> for CommandDescriptor {
     }
 }
 
-impl From<PbClientHello> for AgentRegistration {
+impl From<PbClientHello> for NodeRegistration {
     fn from(value: PbClientHello) -> Self {
         Self {
-            agent_id: value.agent_id,
+            node_id: value.node_id,
             hostname: value.hostname,
             platform: value.platform,
             poll_interval_secs: value.poll_interval_secs,
@@ -35,10 +35,10 @@ impl From<PbClientHello> for AgentRegistration {
     }
 }
 
-impl From<&AgentRegistration> for PbClientHello {
-    fn from(value: &AgentRegistration) -> Self {
+impl From<&NodeRegistration> for PbClientHello {
+    fn from(value: &NodeRegistration) -> Self {
         Self {
-            agent_id: value.agent_id.clone(),
+            node_id: value.node_id.clone(),
             hostname: value.hostname.clone(),
             platform: value.platform.clone(),
             poll_interval_secs: value.poll_interval_secs,

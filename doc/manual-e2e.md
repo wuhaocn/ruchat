@@ -26,7 +26,7 @@ Current code also supports split listeners:
 
 - `RU_SERVER_HTTP_BIND=127.0.0.1:18080`
 - `RU_SERVER_WS_BIND=127.0.0.1:18081`
-- `RU_SERVER_PUBLIC_WS_BASE=ws://127.0.0.1:18081/ws/agents`
+- `RU_SERVER_PUBLIC_WS_BASE=ws://127.0.0.1:18081/ws/nodes`
 
 When split mode is used:
 
@@ -47,7 +47,7 @@ Recommended local dev settings:
 ```bash
 RU_SERVER_BIND=127.0.0.1:18080 \
 RU_SERVER_DB_PATH=./command-plane.db \
-RU_SERVER_PUBLIC_WS_BASE=ws://127.0.0.1:18080/ws/agents \
+RU_SERVER_PUBLIC_WS_BASE=ws://127.0.0.1:18080/ws/nodes \
 RU_SERVER_SHARED_TOKEN=dev-shared-token \
 RU_ADMIN_USERNAME=admin \
 RU_ADMIN_PASSWORD=admin123 \
@@ -89,7 +89,7 @@ cargo run -p command-plane-client -- client-config.json
 Expected behavior:
 
 - client calls `/api/v1/bootstrap`
-- client connects to `/ws/agents/node-1`
+- client connects to `/ws/nodes/node-1`
 - client reports its command list
 - server stores the agent record
 
@@ -99,7 +99,7 @@ Open `http://127.0.0.1:18080/console/login`.
 
 After login:
 
-- open `Agents`
+- open `Nodes`
 - confirm `node-1` is present
 - open the agent detail page
 - confirm the command cards are visible
@@ -147,7 +147,7 @@ If the agent does not appear:
 
 - confirm server and client use the same token
 - confirm `RU_SERVER_PUBLIC_WS_BASE` points to the running server
-- confirm `agent_id` in config matches the WS path returned by bootstrap
+- confirm `node_id` in config matches the WS path returned by bootstrap
 
 If the task stays queued:
 

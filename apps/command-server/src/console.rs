@@ -8,7 +8,7 @@ use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use ru_command_protocol::{
-    AgentSnapshot, CommandDescriptor, CreateTaskRequest, TaskSnapshot, TaskStatus,
+    CommandDescriptor, CreateTaskRequest, NodeSnapshot, TaskSnapshot, TaskStatus,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -18,8 +18,8 @@ pub(crate) fn router() -> Router<Arc<AppState>> {
         .route("/console", get(console_index))
         .route("/console/login", get(login_page).post(login_submit))
         .route("/console/logout", post(logout))
-        .route("/console/agents", get(agents_page))
-        .route("/console/agents/:agent_id", get(agent_detail_page))
+        .route("/console/nodes", get(nodes_page))
+        .route("/console/nodes/:node_id", get(node_detail_page))
         .route("/console/tasks", get(tasks_page).post(create_task_submit))
         .route("/console/tasks/:task_id/cancel", post(cancel_task_submit))
 }
@@ -32,7 +32,7 @@ struct LoginForm {
 
 #[derive(Deserialize)]
 struct TaskForm {
-    agent_id: String,
+    node_id: String,
     command_name: String,
     #[serde(default)]
     args_text: String,
@@ -50,7 +50,7 @@ struct CancelTaskForm {
 
 async fn console_index(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     if state.has_valid_admin_session(&headers) {
-        Redirect::to("/console/agents").into_response()
+        Redirect::to("/console/nodes").into_response()
     } else {
         Redirect::to("/console/login").into_response()
     }
@@ -58,7 +58,7 @@ async fn console_index(State(state): State<Arc<AppState>>, headers: HeaderMap) -
 
 async fn login_page(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     if state.has_valid_admin_session(&headers) {
-        return Redirect::to("/console/agents").into_response();
+        return Redirect::to("/console/nodes").into_response();
     }
 
     login_response(None, StatusCode::OK)
@@ -74,7 +74,7 @@ async fn login_submit(State(state): State<Arc<AppState>>, Form(form): Form<Login
 
     let token = state.create_admin_session();
     let cookie = build_session_cookie(&token, state.admin_session_ttl_secs());
-    let mut response = Redirect::to("/console/agents").into_response();
+    let mut response = Redirect::to("/console/nodes").into_response();
     response
         .headers_mut()
         .insert(SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
@@ -93,63 +93,63 @@ async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
     response
 }
 
-async fn agents_page(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+async fn nodes_page(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     if let Some(response) = require_console_session(&state, &headers) {
         return response;
     }
-    let agents = match state.db.list_agents() {
-        Ok(agents) => agents,
+    let nodes = match state.db.list_nodes() {
+        Ok(nodes) => nodes,
         Err(error) => return server_error_response(error),
     };
 
     let mut rows = String::new();
-    for agent in &agents {
+    for node in &nodes {
         rows.push_str(&format!(
-            "<tr><td><a href=\"/console/agents/{id}\">{id}</a></td><td>{host}</td><td>{platform}</td><td>{count}</td><td>{last_seen}</td></tr>",
-            id = escape_html(&agent.agent_id),
-            host = escape_html(&agent.hostname),
-            platform = escape_html(&agent.platform),
-            count = agent.commands.len(),
-            last_seen = agent.last_seen_unix_secs
+            "<tr><td><a href=\"/console/nodes/{id}\">{id}</a></td><td>{host}</td><td>{platform}</td><td>{count}</td><td>{last_seen}</td></tr>",
+            id = escape_html(&node.node_id),
+            host = escape_html(&node.hostname),
+            platform = escape_html(&node.platform),
+            count = node.commands.len(),
+            last_seen = node.last_seen_unix_secs
         ));
     }
 
     if rows.is_empty() {
-        rows.push_str("<tr><td colspan=\"5\">no agents registered</td></tr>");
+        rows.push_str("<tr><td colspan=\"5\">no nodes registered</td></tr>");
     }
 
     let body = format!(
-        "<section><h1>Agents</h1><p>Registered clients and the commands they reported.</p><table><thead><tr><th>Agent</th><th>Hostname</th><th>Platform</th><th>Commands</th><th>Last Seen</th></tr></thead><tbody>{rows}</tbody></table></section>",
+        "<section><h1>Nodes</h1><p>Registered clients and the commands they reported.</p><table><thead><tr><th>Node</th><th>Hostname</th><th>Platform</th><th>Commands</th><th>Last Seen</th></tr></thead><tbody>{rows}</tbody></table></section>",
         rows = rows
     );
 
-    Html(console_html("Agents", body, true, "")).into_response()
+    Html(console_html("Nodes", body, true, "")).into_response()
 }
 
-async fn agent_detail_page(
+async fn node_detail_page(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Path(agent_id): Path<String>,
+    Path(node_id): Path<String>,
 ) -> Response {
     if let Some(response) = require_console_session(&state, &headers) {
         return response;
     }
 
-    let Some(agent) = (match state.db.get_agent(&agent_id) {
-        Ok(agent) => agent,
+    let Some(node) = (match state.db.get_node(&node_id) {
+        Ok(node) => node,
         Err(error) => return server_error_response(error),
     }) else {
-        return not_found_page("agent not found");
+        return not_found_page("node not found");
     };
 
-    let tasks = match state.db.list_tasks_for_agent(&agent.agent_id, 20) {
+    let tasks = match state.db.list_tasks_for_node(&node.node_id, 20) {
         Ok(tasks) => tasks,
         Err(error) => return server_error_response(error),
     };
-    let body = render_agent_workspace(&agent, &tasks);
+    let body = render_node_workspace(&node, &tasks);
 
     Html(console_html(
-        &format!("Agent {}", agent.agent_id),
+        &format!("Node {}", node.node_id),
         body,
         false,
         "workspace-page",
@@ -175,7 +175,7 @@ async fn tasks_page(State(state): State<Arc<AppState>>, headers: HeaderMap) -> R
     }
 
     let body = format!(
-        "<section><h1>Tasks</h1><p>Execution history and latest results.</p><table><thead><tr><th>Task</th><th>Agent</th><th>Command</th><th>Status</th><th>Args</th><th>Retry</th><th>Created</th><th>Result</th></tr></thead><tbody>{rows}</tbody></table></section>",
+        "<section><h1>Tasks</h1><p>Execution history and latest results.</p><table><thead><tr><th>Task</th><th>Node</th><th>Command</th><th>Status</th><th>Args</th><th>Retry</th><th>Created</th><th>Result</th></tr></thead><tbody>{rows}</tbody></table></section>",
         rows = rows
     );
 
@@ -200,14 +200,14 @@ async fn create_task_submit(
                 return error_page(
                     StatusCode::BAD_REQUEST,
                     "timeout_secs must be a positive integer",
-                    &format!("/console/agents/{}", escape_html(&form.agent_id)),
+                    &format!("/console/nodes/{}", escape_html(&form.node_id)),
                 );
             }
         }
     };
 
     let request = CreateTaskRequest {
-        agent_id: form.agent_id.clone(),
+        node_id: form.node_id.clone(),
         command_name: form.command_name.clone(),
         args: parse_args_text(&form.args_text),
         timeout_secs,
@@ -216,21 +216,21 @@ async fn create_task_submit(
 
     match state.db.create_task(request) {
         Err(error) => server_error_response(error),
-        Ok(CreateTaskOutcome::AgentNotFound) => {
-            error_page(StatusCode::NOT_FOUND, "agent not found", "/console/agents")
+        Ok(CreateTaskOutcome::NodeNotFound) => {
+            error_page(StatusCode::NOT_FOUND, "node not found", "/console/nodes")
         }
         Ok(CreateTaskOutcome::UnsupportedCommand) => error_page(
             StatusCode::BAD_REQUEST,
-            "command is not supported by the agent",
-            &format!("/console/agents/{}", escape_html(&form.agent_id)),
+            "command is not supported by the node",
+            &format!("/console/nodes/{}", escape_html(&form.node_id)),
         ),
         Ok(CreateTaskOutcome::ExtraArgsNotAllowed) => error_page(
             StatusCode::BAD_REQUEST,
             "command does not allow extra args",
-            &format!("/console/agents/{}", escape_html(&form.agent_id)),
+            &format!("/console/nodes/{}", escape_html(&form.node_id)),
         ),
         Ok(CreateTaskOutcome::Created(task)) => {
-            state.notify_agent(&task.agent_id);
+            state.notify_node(&task.node_id);
             Redirect::to(&return_to).into_response()
         }
     }
@@ -261,7 +261,7 @@ async fn cancel_task_submit(
             &return_to,
         ),
         Ok(CancelTaskOutcome::Canceled(task)) => {
-            state.notify_task_cancel(&task.agent_id, task.task_id, task.cancel_reason.clone());
+            state.notify_task_cancel(&task.node_id, task.task_id, task.cancel_reason.clone());
             Redirect::to(&return_to).into_response()
         }
     }
@@ -285,7 +285,7 @@ fn login_response(message: Option<&str>, status: StatusCode) -> Response {
         Html(console_html(
             "Login",
             format!(
-                "<section class=\"login-shell\"><h1>Admin Login</h1><p>Sign in to view agents and dispatch commands.</p>{error}<form method=\"post\" action=\"/console/login\"><label>Username<input name=\"username\" autocomplete=\"username\"></label><label>Password<input type=\"password\" name=\"password\" autocomplete=\"current-password\"></label><button type=\"submit\">Login</button></form></section>",
+                "<section class=\"login-shell\"><h1>Admin Login</h1><p>Sign in to view nodes and dispatch commands.</p>{error}<form method=\"post\" action=\"/console/login\"><label>Username<input name=\"username\" autocomplete=\"username\"></label><label>Password<input type=\"password\" name=\"password\" autocomplete=\"current-password\"></label><button type=\"submit\">Login</button></form></section>",
                 error = error_html
             ),
             false,
@@ -313,46 +313,46 @@ fn error_page(status: StatusCode, message: &str, back_href: &str) -> Response {
 }
 
 fn not_found_page(message: &str) -> Response {
-    error_page(StatusCode::NOT_FOUND, message, "/console/agents")
+    error_page(StatusCode::NOT_FOUND, message, "/console/nodes")
 }
 
-fn render_agent_workspace(agent: &AgentSnapshot, tasks: &[TaskSnapshot]) -> String {
+fn render_node_workspace(node: &NodeSnapshot, tasks: &[TaskSnapshot]) -> String {
     let task_log = if tasks.is_empty() {
         "<div class=\"empty-state\">No execution logs yet. Send a command from the dialogue panel.</div>"
             .to_string()
     } else {
         tasks
             .iter()
-            .map(|task| render_task_timeline_card(task, &agent.agent_id))
+            .map(|task| render_task_timeline_card(task, &node.node_id))
             .collect::<Vec<_>>()
             .join("")
     };
     let dialog_feed = render_dialog_feed(tasks);
 
-    let command_options = agent
+    let command_options = node
         .commands
         .iter()
         .map(render_command_option)
         .collect::<Vec<_>>()
         .join("");
 
-    let first_command = agent.commands.first();
+    let first_command = node.commands.first();
     let command_help = first_command
         .map(render_command_meta_panel)
         .unwrap_or_else(|| {
-            "<div class=\"dialog-meta-card\"><p>No commands reported by this agent.</p></div>"
+            "<div class=\"dialog-meta-card\"><p>No commands reported by this node.</p></div>"
                 .to_string()
         });
 
-    let script = render_agent_workspace_script(&agent.agent_id);
+    let script = render_node_workspace_script(&node.node_id);
 
     format!(
-        "<div class=\"workspace-bar\"><div class=\"workspace-bar-title\"><p class=\"eyebrow\">Agent Workspace</p><h1>{agent_id}</h1><p class=\"workspace-subline\">{hostname} | {platform}</p></div><div class=\"workspace-bar-meta\"><a class=\"workspace-link\" href=\"/console/agents\">Agents</a><a class=\"workspace-link\" href=\"/console/tasks\">Tasks</a><form method=\"post\" action=\"/console/logout\"><button type=\"submit\" class=\"workspace-logout\">Logout</button></form><span class=\"status-chip active\">active</span><span class=\"workspace-mini\">last seen {last_seen}</span></div></div><section class=\"workspace-shell\"><div class=\"workspace-log\"><div class=\"pane-head compact\"><div><p class=\"eyebrow\">Execution Log</p><h2>Task Timeline</h2></div><div class=\"pane-meta\">auto refresh 3s</div></div><div id=\"task-log\" class=\"log-stream\">{task_log}</div></div><aside class=\"workspace-chat\"><div class=\"pane-head compact\"><div><p class=\"eyebrow\">Operator Dialogue</p><h2>Command Session</h2></div></div><div id=\"dialog-feed\" class=\"dialog-feed\">{dialog_feed}</div><form id=\"composer-form\" class=\"composer-card\" method=\"post\" action=\"/console/tasks\"><input type=\"hidden\" name=\"agent_id\" value=\"{agent_id_raw}\"><input type=\"hidden\" name=\"return_to\" value=\"/console/agents/{agent_id_raw}\"><label>Command<select id=\"command-select\" name=\"command_name\">{command_options}</select></label><div id=\"command-meta\">{command_help}</div><label>Extra args<textarea id=\"args-text\" name=\"args_text\" rows=\"2\" placeholder=\"hello&#10;world\"></textarea></label><label>Timeout seconds<input id=\"timeout-input\" type=\"number\" min=\"1\" name=\"timeout_secs\" placeholder=\"30\"></label><p id=\"dialog-status\" class=\"dialog-status\" hidden></p><button id=\"send-button\" type=\"submit\">Send Task</button></form></aside></section>{script}",
-        agent_id = escape_html(&agent.agent_id),
-        agent_id_raw = escape_html(&agent.agent_id),
-        hostname = escape_html(&agent.hostname),
-        platform = escape_html(&agent.platform),
-        last_seen = agent.last_seen_unix_secs,
+        "<div class=\"workspace-bar\"><div class=\"workspace-bar-title\"><p class=\"eyebrow\">Node Workspace</p><h1>{node_id}</h1><p class=\"workspace-subline\">{hostname} | {platform}</p></div><div class=\"workspace-bar-meta\"><a class=\"workspace-link\" href=\"/console/nodes\">Nodes</a><a class=\"workspace-link\" href=\"/console/tasks\">Tasks</a><form method=\"post\" action=\"/console/logout\"><button type=\"submit\" class=\"workspace-logout\">Logout</button></form><span class=\"status-chip active\">active</span><span class=\"workspace-mini\">last seen {last_seen}</span></div></div><section class=\"workspace-shell\"><div class=\"workspace-log\"><div class=\"pane-head compact\"><div><p class=\"eyebrow\">Execution Log</p><h2>Task Timeline</h2></div><div class=\"pane-meta\">auto refresh 3s</div></div><div id=\"task-log\" class=\"log-stream\">{task_log}</div></div><aside class=\"workspace-chat\"><div class=\"pane-head compact\"><div><p class=\"eyebrow\">Operator Dialogue</p><h2>Command Session</h2></div></div><div id=\"dialog-feed\" class=\"dialog-feed\">{dialog_feed}</div><form id=\"composer-form\" class=\"composer-card\" method=\"post\" action=\"/console/tasks\"><input type=\"hidden\" name=\"node_id\" value=\"{node_id_raw}\"><input type=\"hidden\" name=\"return_to\" value=\"/console/nodes/{node_id_raw}\"><label>Command<select id=\"command-select\" name=\"command_name\">{command_options}</select></label><div id=\"command-meta\">{command_help}</div><label>Extra args<textarea id=\"args-text\" name=\"args_text\" rows=\"2\" placeholder=\"hello&#10;world\"></textarea></label><label>Timeout seconds<input id=\"timeout-input\" type=\"number\" min=\"1\" name=\"timeout_secs\" placeholder=\"30\"></label><p id=\"dialog-status\" class=\"dialog-status\" hidden></p><button id=\"send-button\" type=\"submit\">Send Task</button></form></aside></section>{script}",
+        node_id = escape_html(&node.node_id),
+        node_id_raw = escape_html(&node.node_id),
+        hostname = escape_html(&node.hostname),
+        platform = escape_html(&node.platform),
+        last_seen = node.last_seen_unix_secs,
         task_log = task_log,
         dialog_feed = dialog_feed,
         command_options = command_options,
@@ -389,10 +389,10 @@ fn render_task_row(task: &TaskSnapshot, include_agent: bool) -> String {
 
     if include_agent {
         format!(
-            "<tr><td>{task_id}{cancel}</td><td><a href=\"/console/agents/{agent_id}\">{agent_id}</a></td><td>{command}</td><td>{status}</td><td>{args}</td><td>{retry}</td><td>{created}</td><td>{result}</td></tr>",
+            "<tr><td>{task_id}{cancel}</td><td><a href=\"/console/nodes/{node_id}\">{node_id}</a></td><td>{command}</td><td>{status}</td><td>{args}</td><td>{retry}</td><td>{created}</td><td>{result}</td></tr>",
             task_id = task.task_id,
             cancel = cancel_cell,
-            agent_id = escape_html(&task.agent_id),
+            node_id = escape_html(&task.node_id),
             command = escape_html(&task.command_name),
             status = task_status_label(task.status),
             args = escape_html(&display_args(&task.args)),
@@ -415,7 +415,7 @@ fn render_task_row(task: &TaskSnapshot, include_agent: bool) -> String {
     }
 }
 
-fn render_task_timeline_card(task: &TaskSnapshot, agent_id: &str) -> String {
+fn render_task_timeline_card(task: &TaskSnapshot, node_id: &str) -> String {
     let output = match &task.result {
         Some(result) => format!(
             "<details class=\"log-output\"><summary>stdout / stderr</summary><pre>stdout:\n{}\n\nstderr:\n{}\n\nerror:\n{}</pre></details>",
@@ -430,9 +430,9 @@ fn render_task_timeline_card(task: &TaskSnapshot, agent_id: &str) -> String {
         TaskStatus::Queued | TaskStatus::Dispatched | TaskStatus::Running
     ) {
         format!(
-            "<form method=\"post\" action=\"/console/tasks/{task_id}/cancel\"><input type=\"hidden\" name=\"return_to\" value=\"/console/agents/{agent_id}\"><button type=\"submit\" class=\"secondary\">Cancel</button></form>",
+            "<form method=\"post\" action=\"/console/tasks/{task_id}/cancel\"><input type=\"hidden\" name=\"return_to\" value=\"/console/nodes/{node_id}\"><button type=\"submit\" class=\"secondary\">Cancel</button></form>",
             task_id = task.task_id,
-            agent_id = escape_html(agent_id),
+            node_id = escape_html(node_id),
         )
     } else {
         String::new()
@@ -540,10 +540,10 @@ fn render_command_meta_panel(command: &CommandDescriptor) -> String {
     )
 }
 
-fn render_agent_workspace_script(agent_id: &str) -> String {
+fn render_node_workspace_script(node_id: &str) -> String {
     format!(
         "<script>
-const agentId = {agent_id:?};
+const nodeId = {node_id:?};
 const taskLog = document.getElementById('task-log');
 const dialogFeed = document.getElementById('dialog-feed');
 const composerForm = document.getElementById('composer-form');
@@ -588,7 +588,7 @@ function renderTaskCard(task) {{
     ? `exit=${{task.result.exit_code}} duration=${{task.result.duration_ms}}ms`
     : (task.cancel_reason || task.retry_reason || 'waiting for execution');
   const cancel = canCancel
-    ? `<form method=\"post\" action=\"/console/tasks/${{task.task_id}}/cancel\"><input type=\"hidden\" name=\"return_to\" value=\"/console/agents/${{escapeHtml(agentId)}}\"><button type=\"submit\" class=\"secondary\">Cancel</button></form>`
+    ? `<form method=\"post\" action=\"/console/tasks/${{task.task_id}}/cancel\"><input type=\"hidden\" name=\"return_to\" value=\"/console/nodes/${{escapeHtml(nodeId)}}\"><button type=\"submit\" class=\"secondary\">Cancel</button></form>`
     : '';
   return `<article class=\"log-card status-${{escapeHtml(task.status)}}\"><div class=\"log-card-head\"><div><span class=\"status-badge badge-${{escapeHtml(task.status)}}\">${{escapeHtml(task.status)}}</span><h3>${{escapeHtml(task.command_name)}}</h3><p class=\"muted\">task #${{task.task_id}} | args: ${{escapeHtml((task.args || []).join(' ') || '[]')}}</p></div><div class=\"log-card-actions\">${{cancel}}</div></div><dl class=\"log-metrics\"><div><dt>created</dt><dd>${{escapeHtml(task.created_at_unix_secs)}}</dd></div><div><dt>started</dt><dd>${{escapeHtml(task.started_at_unix_secs ?? '-')}}</dd></div><div><dt>finished</dt><dd>${{escapeHtml(task.finished_at_unix_secs ?? '-')}}</dd></div><div><dt>retry</dt><dd>${{escapeHtml(task.retry_count)}}</dd></div></dl><p class=\"log-summary\">${{escapeHtml(summary)}}</p>${{output}}</article>`;
 }}
@@ -629,7 +629,7 @@ function renderPendingPair(item) {{
 
 async function refreshTasks() {{
   try {{
-    const response = await fetch(`/api/v1/agents/${{encodeURIComponent(agentId)}}/tasks?limit=20`, {{ credentials: 'same-origin' }});
+    const response = await fetch(`/api/v1/nodes/${{encodeURIComponent(nodeId)}}/tasks?limit=20`, {{ credentials: 'same-origin' }});
     if (!response.ok) return;
     const tasks = await response.json();
     latestTasks = tasks;
@@ -684,7 +684,7 @@ async function submitComposer(event) {{
       credentials: 'same-origin',
       headers: {{ 'content-type': 'application/json' }},
       body: JSON.stringify({{
-        agent_id: agentId,
+        node_id: nodeId,
         command_name: commandName,
         args,
         timeout_secs: Number.isFinite(timeoutSecs) ? timeoutSecs : null,
@@ -746,7 +746,7 @@ if (commandSelect) {{
   setInterval(refreshTasks, 3000);
 }}
 </script>",
-        agent_id = agent_id
+        node_id = node_id
     )
 }
 
@@ -813,7 +813,7 @@ fn server_error_response(error: crate::db::DbError) -> Response {
 
 fn console_html(title: &str, body: String, show_nav: bool, page_class: &str) -> String {
     let header = if show_nav {
-        "<header><nav><a href=\"/console/agents\">Agents</a><a href=\"/console/tasks\">Tasks</a><form method=\"post\" action=\"/console/logout\"><button type=\"submit\">Logout</button></form></nav></header>"
+        "<header><nav><a href=\"/console/nodes\">Nodes</a><a href=\"/console/tasks\">Tasks</a><form method=\"post\" action=\"/console/logout\"><button type=\"submit\">Logout</button></form></nav></header>"
     } else {
         ""
     };

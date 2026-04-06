@@ -105,24 +105,24 @@ impl AppState {
         true
     }
 
-    pub(crate) fn notify_agent(&self, agent_id: &str) {
+    pub(crate) fn notify_node(&self, node_id: &str) {
         let sender = self
             .sessions
             .lock()
             .ok()
-            .and_then(|sessions| sessions.get(agent_id).cloned());
+            .and_then(|sessions| sessions.get(node_id).cloned());
 
         if let Some(sender) = sender {
             let _ = sender.send(SessionSignal::TryDispatch);
         }
     }
 
-    pub(crate) fn notify_task_cancel(&self, agent_id: &str, task_id: u64, reason: Option<String>) {
+    pub(crate) fn notify_task_cancel(&self, node_id: &str, task_id: u64, reason: Option<String>) {
         let sender = self
             .sessions
             .lock()
             .ok()
-            .and_then(|sessions| sessions.get(agent_id).cloned());
+            .and_then(|sessions| sessions.get(node_id).cloned());
 
         if let Some(sender) = sender {
             let _ = sender.send(SessionSignal::CancelTask { task_id, reason });
@@ -131,27 +131,27 @@ impl AppState {
 
     pub(crate) fn insert_session(
         &self,
-        agent_id: String,
+        node_id: String,
         sender: mpsc::UnboundedSender<SessionSignal>,
     ) {
         if let Ok(mut sessions) = self.sessions.lock() {
-            sessions.insert(agent_id, sender);
+            sessions.insert(node_id, sender);
         }
     }
 
-    pub(crate) fn remove_session(&self, agent_id: &str) {
+    pub(crate) fn remove_session(&self, node_id: &str) {
         if let Ok(mut sessions) = self.sessions.lock() {
-            sessions.remove(agent_id);
+            sessions.remove(node_id);
         }
     }
 
     pub(crate) fn resolve_ws_url(
         &self,
         headers: &HeaderMap,
-        agent_id: &str,
+        node_id: &str,
     ) -> Result<String, (StatusCode, String)> {
         if let Some(base) = &self.public_ws_base {
-            return Ok(format!("{}/{}", base.trim_end_matches('/'), agent_id));
+            return Ok(format!("{}/{}", base.trim_end_matches('/'), node_id));
         }
 
         let host = headers
@@ -164,7 +164,7 @@ impl AppState {
                 )
             })?;
 
-        Ok(format!("ws://{host}/ws/agents/{agent_id}"))
+        Ok(format!("ws://{host}/ws/nodes/{node_id}"))
     }
 }
 

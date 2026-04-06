@@ -20,7 +20,7 @@ pub(crate) async fn fetch_bootstrap(
         client,
         &url,
         &BootstrapRequest {
-            agent_id: config.agent_id.clone(),
+            node_id: config.node_id.clone(),
             auth_token: config.auth_token.clone(),
         },
         config.request_timeout_secs,

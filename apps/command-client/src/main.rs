@@ -13,8 +13,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::new();
 
     println!(
-        "command-plane-client started: agent_id={}, server={}",
-        config.agent_id, config.server_url
+        "command-plane-client started: node_id={}, server={}",
+        config.node_id, config.server_url
     );
 
     loop {

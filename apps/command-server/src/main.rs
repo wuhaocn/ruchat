@@ -18,7 +18,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = ServerConfig::from_env()?;
-    let auth = AuthConfig::new(config.shared_token.clone(), config.agent_tokens.clone())?;
+    let auth = AuthConfig::new(config.shared_token.clone(), config.node_tokens.clone())?;
     let state = Arc::new(AppState::new(
         Database::open(&config.db_path)?,
         config.heartbeat_interval_secs,

@@ -1,13 +1,12 @@
 use crate::config::ClientConfig;
 use crate::executor::{RunningCommand, StartTaskOutcome};
 use futures_util::{SinkExt, StreamExt};
-use ru_command_protocol::pb_agent_payload_envelope::Body as AgentPayloadBody;
 use ru_command_protocol::pb_mqtt_frame::Body as MqttFrameBody;
+use ru_command_protocol::pb_node_payload_envelope::Body as NodePayloadBody;
 use ru_command_protocol::{
-    agent_ack_topic, agent_control_topic, agent_hello_topic, agent_result_topic, agent_task_topic,
-    BootstrapResponse, PbAgentPayloadEnvelope, PbClientHello, PbMqttConnect, PbMqttFrame,
-    PbMqttPingReq, PbMqttPingResp, PbMqttPublish, PbMqttSubscribe, PbTaskAck, PbTaskCancel,
-    PbTaskResult,
+    node_ack_topic, node_control_topic, node_hello_topic, node_result_topic, node_task_topic,
+    BootstrapResponse, PbClientHello, PbMqttConnect, PbMqttFrame, PbMqttPingReq, PbMqttPingResp,
+    PbMqttPublish, PbMqttSubscribe, PbNodePayloadEnvelope, PbTaskAck, PbTaskCancel, PbTaskResult,
 };
 use std::io;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -30,7 +29,7 @@ pub(crate) async fn run_ws_session(
         &mut socket,
         PbMqttFrame {
             body: Some(MqttFrameBody::Connect(PbMqttConnect {
-                client_id: config.agent_id.clone(),
+                client_id: config.node_id.clone(),
                 clean_session: true,
                 auth_token: config.auth_token.clone(),
             })),
@@ -45,8 +44,8 @@ pub(crate) async fn run_ws_session(
         PbMqttFrame {
             body: Some(MqttFrameBody::Subscribe(PbMqttSubscribe {
                 topics: vec![
-                    agent_task_topic(&config.agent_id),
-                    agent_control_topic(&config.agent_id),
+                    node_task_topic(&config.node_id),
+                    node_control_topic(&config.node_id),
                 ],
             })),
         },
@@ -55,9 +54,9 @@ pub(crate) async fn run_ws_session(
 
     send_publish(
         &mut socket,
-        agent_hello_topic(&config.agent_id),
-        PbAgentPayloadEnvelope {
-            body: Some(AgentPayloadBody::ClientHello(PbClientHello::from(
+        node_hello_topic(&config.node_id),
+        PbNodePayloadEnvelope {
+            body: Some(NodePayloadBody::ClientHello(PbClientHello::from(
                 &config.registration(),
             ))),
         },
@@ -86,7 +85,7 @@ pub(crate) async fn run_ws_session(
                 if let Some(finished_task_id) = running_task_finished(&mut running_task)? {
                     let completed_task = running_task.take().expect("running task missing");
                     let result = completed_task.runner.finish().await;
-                    publish_task_result(&mut socket, &config.agent_id, finished_task_id, result).await?;
+                    publish_task_result(&mut socket, &config.node_id, finished_task_id, result).await?;
                 }
             }
             message = socket.next() => {
@@ -160,10 +159,10 @@ async fn handle_binary_message(
 
     match frame.body {
         Some(MqttFrameBody::Publish(publish)) => {
-            let payload = PbAgentPayloadEnvelope::decode_message(&publish.payload)?;
+            let payload = PbNodePayloadEnvelope::decode_message(&publish.payload)?;
             match publish.topic.as_str() {
-                topic if topic == agent_task_topic(&config.agent_id) => {
-                    let Some(AgentPayloadBody::TaskAssignment(task)) = payload.body else {
+                topic if topic == node_task_topic(&config.node_id) => {
+                    let Some(NodePayloadBody::TaskAssignment(task)) = payload.body else {
                         return Ok(());
                     };
                     if running_task.is_some() {
@@ -176,9 +175,9 @@ async fn handle_binary_message(
 
                     send_publish(
                         socket,
-                        agent_ack_topic(&config.agent_id),
-                        PbAgentPayloadEnvelope {
-                            body: Some(AgentPayloadBody::TaskAck(PbTaskAck {
+                        node_ack_topic(&config.node_id),
+                        PbNodePayloadEnvelope {
+                            body: Some(NodePayloadBody::TaskAck(PbTaskAck {
                                 task_id: task.task_id,
                             })),
                         },
@@ -193,16 +192,16 @@ async fn handle_binary_message(
                             });
                         }
                         StartTaskOutcome::Completed(result) => {
-                            publish_task_result(socket, &config.agent_id, task.task_id, result)
+                            publish_task_result(socket, &config.node_id, task.task_id, result)
                                 .await?;
                         }
                     }
                 }
-                topic if topic == agent_control_topic(&config.agent_id) => match payload.body {
-                    Some(AgentPayloadBody::Error(error)) => {
+                topic if topic == node_control_topic(&config.node_id) => match payload.body {
+                    Some(NodePayloadBody::Error(error)) => {
                         eprintln!("server error: {}", error.message);
                     }
-                    Some(AgentPayloadBody::TaskCancel(cancel)) => {
+                    Some(NodePayloadBody::TaskCancel(cancel)) => {
                         handle_task_cancel(running_task, cancel)?;
                     }
                     _ => {}
@@ -259,15 +258,15 @@ fn running_task_finished(
 
 async fn publish_task_result(
     socket: &mut WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
-    agent_id: &str,
+    node_id: &str,
     task_id: u64,
     result: ru_command_protocol::ExecutionResult,
 ) -> Result<(), Box<dyn std::error::Error>> {
     send_publish(
         socket,
-        agent_result_topic(agent_id),
-        PbAgentPayloadEnvelope {
-            body: Some(AgentPayloadBody::TaskResult(PbTaskResult {
+        node_result_topic(node_id),
+        PbNodePayloadEnvelope {
+            body: Some(NodePayloadBody::TaskResult(PbTaskResult {
                 task_id,
                 success: result.success,
                 exit_code: result.exit_code,
@@ -284,7 +283,7 @@ async fn publish_task_result(
 async fn send_publish(
     socket: &mut WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
     topic: String,
-    payload: PbAgentPayloadEnvelope,
+    payload: PbNodePayloadEnvelope,
 ) -> Result<(), Box<dyn std::error::Error>> {
     send_frame(
         socket,
