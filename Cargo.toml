@@ -1,16 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-    "ru-frame/ru-boot/ru-boot-starter",
-    "ru-frame/ru-boot/ru-config-starter",
-    "ru-frame/ru-boot/ru-metrics-starter",
-    "ru-frame/ru-data/ru-mysql-starter",
-    "ru-frame/ru-data/ru-redis-starter",
-    "ru-frame/ru-protocol/ru-mqtt-starter",
     "ru-app/ru-api-server",
     "ru-app/ru-api-user",
-    "ru-app/ru-web-console",
-    "example/ru-frame-example/ru-boot-example",
+    "ru-frame/ru-protocol/ru-command-protocol",
 ]
 
 [workspace.package]
@@ -22,3 +15,11 @@ repository = "https://github.com/wuhaocn/ruchat"
 
 [workspace.dependencies]
 log = "0.4"
+axum = "0.6.20"
+futures-util = "0.3.31"
+hyper = { version = "0.14.32", features = ["client", "http1", "server", "tcp"] }
+prost = "0.12.3"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+tokio = { version = "1.44.1", features = ["full"] }
+tokio-tungstenite = "0.20.1"

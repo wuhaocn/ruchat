@@ -1,0 +1,33 @@
+{
+  "agent_id": "node-1",
+  "auth_token": "dev-shared-token",
+  "server_url": "http://127.0.0.1:18080",
+  "poll_interval_secs": 3,
+  "request_timeout_secs": 10,
+  "commands": [
+    {
+      "name": "hostname",
+      "description": "打印当前主机名",
+      "program": "hostname",
+      "default_args": [],
+      "allow_extra_args": false
+    },
+    {
+      "name": "echo",
+      "description": "回显文本",
+      "program": "echo",
+      "default_args": [],
+      "allow_extra_args": true
+    },
+    {
+      "name": "list_tmp",
+      "description": "列出 /tmp 目录",
+      "program": "ls",
+      "default_args": [
+        "-la",
+        "/tmp"
+      ],
+      "allow_extra_args": false
+    }
+  ]
+}

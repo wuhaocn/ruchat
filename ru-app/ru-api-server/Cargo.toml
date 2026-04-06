@@ -1,5 +1,5 @@
 [package]
-name = "ru-api-server"
+name = "ru-command-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,10 +7,10 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-actix-web = "4.0"  # 确保与 actix-rt 兼容
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-tokio = { version = "1.0", features = ["full"] }
-
-[dev-dependencies]
-actix-rt = "2.5"  # 确保版本兼容
+axum = { workspace = true, features = ["ws"] }
+futures-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+ru-command-protocol = { path = "../../ru-frame/ru-protocol/ru-command-protocol" }
+rusqlite = "0.31.0"

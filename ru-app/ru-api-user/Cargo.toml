@@ -1,11 +1,16 @@
 [package]
-name = "ru-api-user"
+name = "ru-command-client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
+futures-util.workspace = true
+hyper.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+ru-command-protocol = { path = "../../ru-frame/ru-protocol/ru-command-protocol" }
