@@ -67,6 +67,8 @@ impl From<PbTaskResult> for ExecutionResult {
             exit_code: value.exit_code,
             stdout: value.stdout,
             stderr: value.stderr,
+            stdout_truncated: value.stdout_truncated,
+            stderr_truncated: value.stderr_truncated,
             duration_ms: value.duration_ms,
             error: value.error,
         }

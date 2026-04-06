@@ -385,6 +385,8 @@ mod tests {
                     stderr: String::new(),
                     duration_ms: 12,
                     error: None,
+                    stdout_truncated: false,
+                    stderr_truncated: false,
                 })),
             },
         )

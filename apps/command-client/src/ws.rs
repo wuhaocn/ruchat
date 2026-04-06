@@ -274,6 +274,8 @@ async fn publish_task_result(
                 stderr: result.stderr,
                 duration_ms: result.duration_ms,
                 error: result.error,
+                stdout_truncated: result.stdout_truncated,
+                stderr_truncated: result.stderr_truncated,
             })),
         },
     )

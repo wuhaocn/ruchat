@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub const MAX_RESULT_OUTPUT_BYTES: usize = 64 * 1024;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandDescriptor {
     pub name: String,
@@ -76,6 +78,10 @@ pub struct ExecutionResult {
     pub exit_code: Option<i32>,
     pub stdout: String,
     pub stderr: String,
+    #[serde(default)]
+    pub stdout_truncated: bool,
+    #[serde(default)]
+    pub stderr_truncated: bool,
     pub duration_ms: u64,
     pub error: Option<String>,
 }

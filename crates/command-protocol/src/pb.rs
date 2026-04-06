@@ -72,6 +72,10 @@ pub struct PbTaskResult {
     pub duration_ms: u64,
     #[prost(string, optional, tag = "7")]
     pub error: Option<String>,
+    #[prost(bool, tag = "8")]
+    pub stdout_truncated: bool,
+    #[prost(bool, tag = "9")]
+    pub stderr_truncated: bool,
 }
 
 #[derive(Clone, PartialEq, Message)]

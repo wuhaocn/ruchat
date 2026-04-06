@@ -91,7 +91,7 @@ Expected behavior:
 - client calls `/api/v1/bootstrap`
 - client connects to `/ws/nodes/node-1`
 - client reports its command list
-- server stores the agent record
+- server stores the node record
 
 ## 6. Verify In Console
 
@@ -101,7 +101,7 @@ After login:
 
 - open `Nodes`
 - confirm `node-1` is present
-- open the agent detail page
+- open the node detail page
 - confirm the command cards are visible
 
 ## 7. Dispatch A Command
@@ -143,7 +143,7 @@ If you register a longer-running command later:
 
 ## 10. Failure Checklist
 
-If the agent does not appear:
+If the node does not appear:
 
 - confirm server and client use the same token
 - confirm `RU_SERVER_PUBLIC_WS_BASE` points to the running server

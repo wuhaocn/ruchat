@@ -36,9 +36,7 @@ impl ServerConfig {
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(8 * 60 * 60);
         let shared_token = std::env::var("RU_SERVER_SHARED_TOKEN").ok();
-        let node_tokens = match std::env::var("RU_SERVER_NODE_TOKENS_JSON")
-            .or_else(|_| std::env::var("RU_SERVER_AGENT_TOKENS_JSON"))
-        {
+        let node_tokens = match std::env::var("RU_SERVER_NODE_TOKENS_JSON") {
             Ok(value) => serde_json::from_str::<HashMap<String, String>>(&value)?,
             Err(_) => HashMap::new(),
         };
@@ -78,7 +76,6 @@ mod tests {
         "RU_ADMIN_SESSION_TTL_SECS",
         "RU_SERVER_SHARED_TOKEN",
         "RU_SERVER_NODE_TOKENS_JSON",
-        "RU_SERVER_AGENT_TOKENS_JSON",
     ];
 
     #[test]

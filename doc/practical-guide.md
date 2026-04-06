@@ -104,7 +104,7 @@ bash scripts/run-client-dev.sh client-config.example.json
 2. 启动客户端
 3. 打开控制台并登录
 4. 进入 `Nodes`
-5. 点开某个 agent，例如 `node-1`
+5. 点开某个 node，例如 `node-1`
 6. 在右侧选择命令并发送
 7. 在左侧查看执行日志和输出
 
@@ -129,7 +129,7 @@ bash scripts/run-client-dev.sh client-config.example.json
 - `RU_SERVER_PUBLIC_WS_BASE`
   bootstrap 返回给客户端的 WS 基地址
 - `RU_SERVER_SHARED_TOKEN`
-  agent 共享 token
+  node 共享 token
 - `RU_ADMIN_USERNAME`
   控制台用户名
 - `RU_ADMIN_PASSWORD`
@@ -147,7 +147,7 @@ bash scripts/run-client-dev.sh client-config.example.json
 当前已经具备：
 
 - 受控命令下发
-- agent 注册
+- node 注册
 - 任务状态跟踪
 - 任务取消
 - 控制台查看和操作

@@ -9,6 +9,7 @@ mod topic;
 pub use domain::{
     CancelTaskRequest, CommandDescriptor, CreateTaskRequest, ExecutionResult, NodeRegistration,
     NodeSnapshot, PendingTask, SubmitTaskResultRequest, TaskSnapshot, TaskStatus,
+    MAX_RESULT_OUTPUT_BYTES,
 };
 pub use http::{BootstrapRequest, BootstrapResponse};
 pub use mqtt::{

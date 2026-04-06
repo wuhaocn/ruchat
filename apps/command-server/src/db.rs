@@ -1070,6 +1070,8 @@ mod tests {
                         exit_code: Some(0),
                         stdout: "hello sqlite\n".to_string(),
                         stderr: String::new(),
+                        stdout_truncated: false,
+                        stderr_truncated: false,
                         duration_ms: 12,
                         error: None,
                     },

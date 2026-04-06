@@ -8,7 +8,8 @@ use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use ru_command_protocol::{
-    CommandDescriptor, CreateTaskRequest, NodeSnapshot, TaskSnapshot, TaskStatus,
+    CommandDescriptor, CreateTaskRequest, ExecutionResult, NodeSnapshot, TaskSnapshot, TaskStatus,
+    MAX_RESULT_OUTPUT_BYTES,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -361,16 +362,17 @@ fn render_node_workspace(node: &NodeSnapshot, tasks: &[TaskSnapshot]) -> String 
     )
 }
 
-fn render_task_row(task: &TaskSnapshot, include_agent: bool) -> String {
+fn render_task_row(task: &TaskSnapshot, include_node: bool) -> String {
     let result_html = match &task.result {
         Some(result) => format!(
-            "<details><summary>success={} exit={:?} duration={}ms</summary><pre>stdout:\n{}\n\nstderr:\n{}\n\nerror:\n{}</pre></details>",
-            result.success,
-            result.exit_code,
-            result.duration_ms,
-            escape_html(&result.stdout),
-            escape_html(&result.stderr),
-            escape_html(result.error.as_deref().unwrap_or(""))
+            "<details><summary>success={success} exit={exit_code:?} duration={duration_ms}ms</summary>{notes}<pre>stdout:\n{stdout}\n\nstderr:\n{stderr}\n\nerror:\n{error}</pre></details>",
+            success = result.success,
+            exit_code = result.exit_code,
+            duration_ms = result.duration_ms,
+            notes = render_result_truncation_notice(result),
+            stdout = escape_html(&result.stdout),
+            stderr = escape_html(&result.stderr),
+            error = escape_html(result.error.as_deref().unwrap_or(""))
         ),
         None => escape_html(task.cancel_reason.as_deref().unwrap_or("-")),
     };
@@ -387,7 +389,7 @@ fn render_task_row(task: &TaskSnapshot, include_agent: bool) -> String {
         String::new()
     };
 
-    if include_agent {
+    if include_node {
         format!(
             "<tr><td>{task_id}{cancel}</td><td><a href=\"/console/nodes/{node_id}\">{node_id}</a></td><td>{command}</td><td>{status}</td><td>{args}</td><td>{retry}</td><td>{created}</td><td>{result}</td></tr>",
             task_id = task.task_id,
@@ -418,10 +420,11 @@ fn render_task_row(task: &TaskSnapshot, include_agent: bool) -> String {
 fn render_task_timeline_card(task: &TaskSnapshot, node_id: &str) -> String {
     let output = match &task.result {
         Some(result) => format!(
-            "<details class=\"log-output\"><summary>stdout / stderr</summary><pre>stdout:\n{}\n\nstderr:\n{}\n\nerror:\n{}</pre></details>",
-            escape_html(&result.stdout),
-            escape_html(&result.stderr),
-            escape_html(result.error.as_deref().unwrap_or("-"))
+            "<details class=\"log-output\"><summary>stdout / stderr</summary>{notes}<pre>stdout:\n{stdout}\n\nstderr:\n{stderr}\n\nerror:\n{error}</pre></details>",
+            notes = render_result_truncation_notice(result),
+            stdout = escape_html(&result.stdout),
+            stderr = escape_html(&result.stderr),
+            error = escape_html(result.error.as_deref().unwrap_or("-"))
         ),
         None => String::new(),
     };
@@ -496,10 +499,17 @@ fn render_dialog_pair(task: &TaskSnapshot) -> String {
     let extra = match &task.result {
         Some(result) => {
             let stdout = result.stdout.trim();
+            let truncation = result_truncation_summary(result);
             if stdout.is_empty() {
-                "no stdout".to_string()
-            } else {
+                if truncation.is_empty() {
+                    "no stdout".to_string()
+                } else {
+                    truncation
+                }
+            } else if truncation.is_empty() {
                 format!("stdout: {}", truncate_text(stdout, 120))
+            } else {
+                format!("{} | stdout: {}", truncation, truncate_text(stdout, 120))
             }
         }
         None => task
@@ -515,6 +525,35 @@ fn render_dialog_pair(task: &TaskSnapshot) -> String {
     );
 
     format!("{operator}{system}")
+}
+
+fn render_result_truncation_notice(result: &ExecutionResult) -> String {
+    let summary = result_truncation_summary(result);
+    if summary.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<p class=\"muted truncation-note\">{}</p>",
+            escape_html(&summary)
+        )
+    }
+}
+
+fn result_truncation_summary(result: &ExecutionResult) -> String {
+    let mut notes = Vec::new();
+    if result.stdout_truncated {
+        notes.push(format!(
+            "stdout truncated after {} bytes",
+            MAX_RESULT_OUTPUT_BYTES
+        ));
+    }
+    if result.stderr_truncated {
+        notes.push(format!(
+            "stderr truncated after {} bytes",
+            MAX_RESULT_OUTPUT_BYTES
+        ));
+    }
+    notes.join(" | ")
 }
 
 fn render_command_option(command: &CommandDescriptor) -> String {
@@ -544,6 +583,7 @@ fn render_node_workspace_script(node_id: &str) -> String {
     format!(
         "<script>
 const nodeId = {node_id:?};
+const maxResultOutputBytes = {max_result_output_bytes};
 const taskLog = document.getElementById('task-log');
 const dialogFeed = document.getElementById('dialog-feed');
 const composerForm = document.getElementById('composer-form');
@@ -581,8 +621,9 @@ function escapeHtml(value) {{
 
 function renderTaskCard(task) {{
   const canCancel = ['queued', 'dispatched', 'running'].includes(task.status);
+  const outputNotes = task.result ? renderResultNotes(task.result) : '';
   const output = task.result
-    ? `<details class=\"log-output\"><summary>stdout / stderr</summary><pre>stdout:\\n${{escapeHtml(task.result.stdout)}}\\n\\nstderr:\\n${{escapeHtml(task.result.stderr)}}\\n\\nerror:\\n${{escapeHtml(task.result.error ?? '-')}}</pre></details>`
+    ? `<details class=\"log-output\"><summary>stdout / stderr</summary>${{outputNotes}}<pre>stdout:\\n${{escapeHtml(task.result.stdout)}}\\n\\nstderr:\\n${{escapeHtml(task.result.stderr)}}\\n\\nerror:\\n${{escapeHtml(task.result.error ?? '-')}}</pre></details>`
     : '';
   const summary = task.result
     ? `exit=${{task.result.exit_code}} duration=${{task.result.duration_ms}}ms`
@@ -598,13 +639,28 @@ function truncateText(value, limit) {{
   return value.slice(0, limit - 3) + '...';
 }}
 
+function resultTruncationSummary(result) {{
+  const notes = [];
+  if (result.stdout_truncated) notes.push(`stdout truncated after ${{maxResultOutputBytes}} bytes`);
+  if (result.stderr_truncated) notes.push(`stderr truncated after ${{maxResultOutputBytes}} bytes`);
+  return notes.join(' | ');
+}}
+
+function renderResultNotes(result) {{
+  const summary = resultTruncationSummary(result);
+  return summary ? `<p class=\"muted truncation-note\">${{escapeHtml(summary)}}</p>` : '';
+}}
+
 function renderDialogPair(task) {{
   const stdout = task.result && task.result.stdout ? task.result.stdout.trim() : '';
+  const truncation = task.result ? resultTruncationSummary(task.result) : '';
   const summary = task.result
     ? `status=${{task.status}} exit=${{task.result.exit_code}} duration=${{task.result.duration_ms}}ms`
     : `status=${{task.status}}`;
   const extra = task.result
-    ? (stdout ? `stdout: ${{truncateText(stdout, 120)}}` : 'no stdout')
+    ? (stdout
+      ? (truncation ? `${{truncation}} | stdout: ${{truncateText(stdout, 120)}}` : `stdout: ${{truncateText(stdout, 120)}}`)
+      : (truncation || 'no stdout'))
     : (task.cancel_reason || task.retry_reason || 'waiting for execution');
   return `<article class=\"dialog-bubble operator\"><p class=\"dialog-role\">operator</p><p>run <strong>${{escapeHtml(task.command_name)}}</strong></p><p class=\"dialog-detail\">args: ${{escapeHtml((task.args || []).join(' ') || '[]')}}</p><p class=\"dialog-detail\">task #${{task.task_id}} at ${{escapeHtml(task.created_at_unix_secs)}}</p></article><article class=\"dialog-bubble system\"><p class=\"dialog-role\">system</p><p>${{escapeHtml(summary)}}</p><p class=\"dialog-detail\">${{escapeHtml(extra)}}</p></article>`;
 }}
@@ -746,7 +802,8 @@ if (commandSelect) {{
   setInterval(refreshTasks, 3000);
 }}
 </script>",
-        node_id = node_id
+        node_id = node_id,
+        max_result_output_bytes = MAX_RESULT_OUTPUT_BYTES
     )
 }
 
@@ -953,6 +1010,10 @@ button {
 }
 .muted {
     color: #6b7280;
+}
+.truncation-note {
+    margin: 0 0 8px;
+    font-size: 12px;
 }
 .error {
     color: #b91c1c;
