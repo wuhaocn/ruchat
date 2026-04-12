@@ -42,6 +42,7 @@ AI 在当前阶段只是未来调用方，不是当前主线功能。
 - WebSocket 内承载 MQTT-like 消息语义
 - MQTT-like `PUBLISH.payload` 内继续承载 Protobuf 业务消息
 - 服务端为每个在线 node 维护一条 session
+- 服务端在订阅完成后下发 `SessionInfo`
 
 ### 2.3 Node 注册
 
@@ -50,11 +51,18 @@ AI 在当前阶段只是未来调用方，不是当前主线功能。
 - 上报 `hostname`
 - 上报 `platform`
 - 上报 `poll_interval_secs`
+
+`ClientHello` 只负责连接注册，不再携带命令能力清单。
+
+### 2.4 命令能力上报
+
+- 客户端注册后发送 `CommandCatalog`
 - 上报支持命令列表
+- 每条命令包含名称、描述、默认参数和是否允许额外参数
 
 服务端接收后会把这些信息持久化到 SQLite。
 
-### 2.4 任务管理
+### 2.5 任务管理
 
 - 服务端可创建任务
 - 服务端可按 node 查询任务
@@ -62,7 +70,7 @@ AI 在当前阶段只是未来调用方，不是当前主线功能。
 - 服务端可取消未完成任务
 - 服务端支持基础重试和断线回队
 
-### 2.5 本地命令执行
+### 2.6 本地命令执行
 
 - 客户端按已声明命令执行本地进程
 - 支持默认参数
@@ -71,7 +79,7 @@ AI 在当前阶段只是未来调用方，不是当前主线功能。
 - 支持回传退出码、耗时、错误信息
 - 支持服务端下发取消
 
-### 2.6 后台控制台
+### 2.7 后台控制台
 
 - 后台登录
 - 查看 node 列表
@@ -161,10 +169,14 @@ AI 在当前阶段只是未来调用方，不是当前主线功能。
 
 - [http.rs](/Users/wuhao/data/ai/ruchat/crates/command-protocol/src/http.rs)
   HTTP DTO
+- [proto/transport.proto](/Users/wuhao/data/ai/ruchat/crates/command-protocol/proto/transport.proto)
+  长连接传输层 schema 源文件
+- [proto/control.proto](/Users/wuhao/data/ai/ruchat/crates/command-protocol/proto/control.proto)
+  业务消息层 schema 源文件
 - [mqtt.rs](/Users/wuhao/data/ai/ruchat/crates/command-protocol/src/mqtt.rs)
-  WS 内部帧语义
+  transport proto 的 Rust 镜像
 - [pb.rs](/Users/wuhao/data/ai/ruchat/crates/command-protocol/src/pb.rs)
-  业务消息
+  control proto 的 Rust 镜像
 - [topic.rs](/Users/wuhao/data/ai/ruchat/crates/command-protocol/src/topic.rs)
   topic 命名约定
 - [domain.rs](/Users/wuhao/data/ai/ruchat/crates/command-protocol/src/domain.rs)
@@ -190,8 +202,12 @@ AI 在当前阶段只是未来调用方，不是当前主线功能。
 6. 服务端校验 `client_id / path_node_id / auth_token`
 7. 服务端返回 `CONNACK`
 8. 客户端订阅任务和控制 topic
-9. 客户端发送 `ClientHello`
-10. 服务端完成 node 注册并尝试派发任务
+9. 服务端返回 `SUBACK`
+10. 服务端在 `control` topic 下发 `SessionInfo`
+11. 客户端发送 `ClientHello`
+12. 客户端发送 `CommandCatalog`
+13. 服务端完成 node 注册并尝试派发任务
+14. 客户端可额外发送 `TaskPullRequest` 作为补偿拉取
 
 ### 4.2 通道内消息语义
 
@@ -228,7 +244,7 @@ AI 在当前阶段只是未来调用方，不是当前主线功能。
 - `result`
   客户端回传执行结果
 - `control`
-  服务端发送取消和错误控制消息
+  会话信息、拉取补偿、取消和错误控制消息
 
 ### 4.4 会话内调度能力
 
@@ -237,7 +253,12 @@ AI 在当前阶段只是未来调用方，不是当前主线功能。
 - 有新任务时通知 node session 尝试派发
 - 任务被取消时通知对应 session 下发取消信号
 
-这使得任务不是靠轮询拉取，而是通过当前长连接直接推送。
+当前调度以服务端 push 为主，但客户端也支持在控制 topic 上主动 `pull` 作为补偿路径。
+
+- 主路径：服务端直接通过 `task` topic 推送 `TaskAssignment`
+- 补偿路径：客户端发送 `TaskPullRequest`，服务端回 `TaskPullResponse`
+
+这样既保留了单连接直推，又允许客户端在重连或完成上一个任务后主动补拉。
 
 ### 4.5 心跳与存活能力
 
@@ -293,7 +314,11 @@ AI 在当前阶段只是未来调用方，不是当前主线功能。
 4. 服务端校验 `auth_token`
 5. 服务端返回 `CONNACK`
 6. 客户端发送 `SUBSCRIBE`
-7. 客户端发送 `hello` topic 的 `ClientHello`
+7. 服务端返回 `SUBACK`
+8. 服务端发送 `control` topic 的 `SessionInfo`
+9. 客户端发送 `hello` topic 的 `ClientHello`
+10. 客户端发送 `hello` topic 的 `CommandCatalog`
+11. 客户端可发送 `control` topic 的 `TaskPullRequest`
 
 如果第 2 步不是 `CONNECT`，或鉴权失败，服务端会拒绝连接。
 
@@ -307,7 +332,7 @@ AI 在当前阶段只是未来调用方，不是当前主线功能。
 当前 topic 和载荷要求：
 
 - `nodes/{node_id}/hello`
-  只允许 `ClientHello`
+  允许 `ClientHello` 和 `CommandCatalog`
 - `nodes/{node_id}/task`
   只允许 `TaskAssignment`
 - `nodes/{node_id}/ack`
@@ -315,7 +340,7 @@ AI 在当前阶段只是未来调用方，不是当前主线功能。
 - `nodes/{node_id}/result`
   只允许 `TaskResult`
 - `nodes/{node_id}/control`
-  允许 `TaskCancel` 和 `Error`
+  允许 `SessionInfo`、`TaskPullRequest`、`TaskPullResponse`、`TaskCancel` 和 `Error`
 
 任务收发顺序要求：
 
@@ -326,6 +351,19 @@ AI 在当前阶段只是未来调用方，不是当前主线功能。
 5. 服务端将任务置为 `running`
 6. 客户端执行完成后发送 `TaskResult`
 7. 服务端将任务更新为 `succeeded` 或 `failed`
+
+补偿拉取顺序要求：
+
+1. 客户端发送 `TaskPullRequest`
+2. 服务端若当前无可派发任务，返回空的 `TaskPullResponse`
+3. 服务端若成功 claim 到任务，返回带单个 `TaskAssignment` 的 `TaskPullResponse`
+4. 客户端执行该任务后仍按 `TaskAck -> TaskResult` 规则回传
+
+补偿拉取约束：
+
+- `TaskPullRequest.node_id` 必须等于当前已鉴权的连接 node_id
+- 当前实现仍是单 node 单 in-flight 模型，所以即使 `limit > 1` 也最多返回 1 条任务
+- `limit = 0` 时服务端直接返回空的 `TaskPullResponse`
 
 取消与超时要求：
 
@@ -449,7 +487,7 @@ AI 在当前阶段只是未来调用方，不是当前主线功能。
 
 - 同一客户端同一时刻只执行一个任务
 - 输出是任务结束后整块回传，不是流式输出
-- 没有输出长度限制和截断策略
+- stdout/stderr 当前各自限制在 64 KiB，超过部分会被截断并带回截断标记
 - 没有资源隔离，例如 cgroup、namespace、sandbox
 - 没有审批策略和高危命令分级
 - 没有交互式 shell / REPL 会话
@@ -494,11 +532,10 @@ AI 在当前阶段只是未来调用方，不是当前主线功能。
 
 如果继续按“实用优先”推进，建议优先顺序如下：
 
-1. 修正取消和超时后的会话状态机
-2. 增加 stdout/stderr 长度限制和截断策略
-3. 增加端到端集成测试，固定 `bootstrap -> ws -> hello -> task -> ack -> result`
-4. 增加更明确的审计字段
-5. 再决定是否要做流式输出或真正交互式终端
+1. 增加更明确的审计字段
+2. 继续补端到端集成测试，固定 `bootstrap -> ws -> hello -> task -> ack -> result`
+3. 收紧鉴权和 admin session 安全模型
+4. 再决定是否要做流式输出或真正交互式终端
 
 当前不建议立即扩展到复杂 AI 编排。
 

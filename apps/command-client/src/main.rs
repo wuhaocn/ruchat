@@ -27,6 +27,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
+        eprintln!(
+            "bootstrap ok: ws_url={}, protocol={}, transport={}, capabilities={}",
+            bootstrap.ws_url,
+            bootstrap.protocol_version,
+            bootstrap.transport_stack,
+            bootstrap.capabilities.join(",")
+        );
+
         if let Err(error) = ws::run_ws_session(&config, bootstrap).await {
             eprintln!("session ended: {error}");
             tokio::time::sleep(Duration::from_secs(config.poll_interval_secs)).await;

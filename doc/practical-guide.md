@@ -32,11 +32,20 @@
 - HTTP
   用于 bootstrap 和后台管理接口
 - WebSocket
-  用于客户端和服务端的长连接
+  用于客户端和服务端的长连接承载
 - MQTT-like
-  运行在 WebSocket 之上的消息语义
+  运行在 WebSocket 之上的生命周期消息语义
 - Protobuf
   运行在 MQTT-like `PUBLISH.payload` 中的业务载荷
+
+当前最小时序：
+
+1. HTTP `bootstrap` 返回 `ws_url`
+2. WS 内先做 `CONNECT / CONNACK`
+3. 然后做 `SUBSCRIBE / SUBACK`
+4. 服务端先发 `SessionInfo`
+5. 客户端再发 `ClientHello` 和 `CommandCatalog`
+6. 任务优先由服务端 push，下游可用 `TaskPullRequest / TaskPullResponse` 补偿
 
 当前端口模型：
 
@@ -161,6 +170,11 @@ bash scripts/run-client-dev.sh client-config.example.json
 - 更强的鉴权模型，例如 mTLS
 - 多实例共享 admin session
 
+当前已经有：
+
+- stdout/stderr 结果长度限制与截断标记
+- 控制台对截断结果的提示
+
 ## 9. 当前最实用的使用原则
 
 - 不要把它当任意远控 shell
@@ -173,6 +187,6 @@ bash scripts/run-client-dev.sh client-config.example.json
 如果只按“实用优先”推进，下一步建议顺序是：
 
 1. 补集成测试，固定 `bootstrap -> ws -> task -> result`
-2. 给任务输出增加长度限制和截断
-3. 增加更明确的审计字段
+2. 增加更明确的审计字段
+3. 继续优化控制台的信息层级和任务详情展示
 4. 再考虑 AI 调用层

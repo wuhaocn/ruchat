@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package command_plane.transport;
+
+message PbMqttConnect {
+  string client_id = 1;
+  bool clean_session = 2;
+  string auth_token = 3;
+}
+
+message PbMqttConnAck {
+  bool accepted = 1;
+  string message = 2;
+}
+
+message PbMqttSubscribe {
+  repeated string topics = 1;
+}
+
+message PbMqttSubAck {
+  repeated string topics = 1;
+}
+
+message PbMqttPublish {
+  string topic = 1;
+  bytes payload = 2;
+}
+
+message PbMqttPingReq {
+  uint64 unix_secs = 1;
+}
+
+message PbMqttPingResp {
+  uint64 unix_secs = 1;
+}
+
+message PbMqttFrame {
+  oneof body {
+    PbMqttConnect connect = 1;
+    PbMqttConnAck conn_ack = 2;
+    PbMqttSubscribe subscribe = 3;
+    PbMqttSubAck sub_ack = 4;
+    PbMqttPublish publish = 5;
+    PbMqttPingReq ping_req = 6;
+    PbMqttPingResp ping_resp = 7;
+  }
+}

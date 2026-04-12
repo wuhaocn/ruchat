@@ -90,7 +90,8 @@ Expected behavior:
 
 - client calls `/api/v1/bootstrap`
 - client connects to `/ws/nodes/node-1`
-- client reports its command list
+- server first publishes `SessionInfo` on the control topic
+- client reports `ClientHello` and `CommandCatalog`
 - server stores the node record
 
 ## 6. Verify In Console

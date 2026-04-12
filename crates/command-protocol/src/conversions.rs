@@ -30,7 +30,7 @@ impl From<PbClientHello> for NodeRegistration {
             hostname: value.hostname,
             platform: value.platform,
             poll_interval_secs: value.poll_interval_secs,
-            commands: value.commands.into_iter().map(Into::into).collect(),
+            commands: Vec::new(),
         }
     }
 }
@@ -42,7 +42,6 @@ impl From<&NodeRegistration> for PbClientHello {
             hostname: value.hostname.clone(),
             platform: value.platform.clone(),
             poll_interval_secs: value.poll_interval_secs,
-            commands: value.commands.iter().map(Into::into).collect(),
         }
     }
 }
@@ -72,5 +71,47 @@ impl From<PbTaskResult> for ExecutionResult {
             duration_ms: value.duration_ms,
             error: value.error,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_hello_conversion_does_not_carry_commands() {
+        let hello = PbClientHello {
+            node_id: "node-1".to_string(),
+            hostname: "host-a".to_string(),
+            platform: "linux-amd64".to_string(),
+            poll_interval_secs: 5,
+        };
+
+        let registration = NodeRegistration::from(hello);
+        assert_eq!(registration.node_id, "node-1");
+        assert_eq!(registration.hostname, "host-a");
+        assert_eq!(registration.platform, "linux-amd64");
+        assert_eq!(registration.poll_interval_secs, 5);
+        assert!(registration.commands.is_empty());
+    }
+
+    #[test]
+    fn pending_task_conversion_maps_retry_count_to_attempt() {
+        let task = PendingTask {
+            task_id: 7,
+            node_id: "node-1".to_string(),
+            command_name: "echo".to_string(),
+            args: vec!["hello".to_string()],
+            created_at_unix_secs: 1_700_000_000,
+            timeout_secs: Some(30),
+            retry_count: 2,
+        };
+
+        let assignment = PbTaskAssignment::from(&task);
+        assert_eq!(assignment.task_id, 7);
+        assert_eq!(assignment.command_name, "echo");
+        assert_eq!(assignment.args, vec!["hello"]);
+        assert_eq!(assignment.timeout_secs, Some(30));
+        assert_eq!(assignment.attempt, 3);
     }
 }

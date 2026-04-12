@@ -34,22 +34,25 @@ impl ClientConfig {
         Ok(serde_json::from_str(&config_raw)?)
     }
 
-    pub(crate) fn registration(&self) -> NodeRegistration {
+    pub(crate) fn command_descriptors(&self) -> Vec<CommandDescriptor> {
+        self.commands
+            .iter()
+            .map(|command| CommandDescriptor {
+                name: command.name.clone(),
+                description: command.description.clone(),
+                default_args: command.default_args.clone(),
+                allow_extra_args: command.allow_extra_args,
+            })
+            .collect()
+    }
+
+    pub(crate) fn hello_registration(&self) -> NodeRegistration {
         NodeRegistration {
             node_id: self.node_id.clone(),
             hostname: hostname(),
             platform: format!("{}-{}", env::consts::OS, env::consts::ARCH),
             poll_interval_secs: self.poll_interval_secs,
-            commands: self
-                .commands
-                .iter()
-                .map(|command| CommandDescriptor {
-                    name: command.name.clone(),
-                    description: command.description.clone(),
-                    default_args: command.default_args.clone(),
-                    allow_extra_args: command.allow_extra_args,
-                })
-                .collect(),
+            commands: Vec::new(),
         }
     }
 }

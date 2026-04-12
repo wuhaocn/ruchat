@@ -1,5 +1,7 @@
 use prost::Message;
 
+// Wire schema source-of-truth also exists in proto/control.proto.
+
 #[derive(Clone, PartialEq, Message)]
 pub struct PbCommandDescriptor {
     #[prost(string, tag = "1")]
@@ -13,6 +15,12 @@ pub struct PbCommandDescriptor {
 }
 
 #[derive(Clone, PartialEq, Message)]
+pub struct PbCommandCatalog {
+    #[prost(message, repeated, tag = "1")]
+    pub commands: Vec<PbCommandDescriptor>,
+}
+
+#[derive(Clone, PartialEq, Message)]
 pub struct PbClientHello {
     #[prost(string, tag = "1")]
     pub node_id: String,
@@ -22,8 +30,22 @@ pub struct PbClientHello {
     pub platform: String,
     #[prost(uint64, tag = "4")]
     pub poll_interval_secs: u64,
-    #[prost(message, repeated, tag = "5")]
-    pub commands: Vec<PbCommandDescriptor>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub struct PbSessionInfo {
+    #[prost(string, tag = "1")]
+    pub session_id: String,
+    #[prost(string, tag = "2")]
+    pub node_id: String,
+    #[prost(uint64, tag = "3")]
+    pub heartbeat_interval_secs: u64,
+    #[prost(uint64, tag = "4")]
+    pub max_result_output_bytes: u64,
+    #[prost(string, tag = "5")]
+    pub protocol_version: String,
+    #[prost(uint64, tag = "6")]
+    pub server_unix_secs: u64,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -40,6 +62,20 @@ pub struct PbTaskAssignment {
     pub timeout_secs: Option<u64>,
     #[prost(uint32, tag = "6")]
     pub attempt: u32,
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub struct PbTaskPullRequest {
+    #[prost(string, tag = "1")]
+    pub node_id: String,
+    #[prost(uint32, tag = "2")]
+    pub limit: u32,
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub struct PbTaskPullResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub tasks: Vec<PbTaskAssignment>,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -86,13 +122,17 @@ pub struct PbNodeError {
 
 #[derive(Clone, PartialEq, Message)]
 pub struct PbNodePayloadEnvelope {
-    #[prost(oneof = "pb_node_payload_envelope::Body", tags = "1, 2, 3, 4, 5, 6")]
+    #[prost(
+        oneof = "pb_node_payload_envelope::Body",
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10"
+    )]
     pub body: Option<pb_node_payload_envelope::Body>,
 }
 
 pub mod pb_node_payload_envelope {
     use super::{
-        PbClientHello, PbNodeError, PbTaskAck, PbTaskAssignment, PbTaskCancel, PbTaskResult,
+        PbClientHello, PbCommandCatalog, PbNodeError, PbSessionInfo, PbTaskAck, PbTaskAssignment,
+        PbTaskCancel, PbTaskPullRequest, PbTaskPullResponse, PbTaskResult,
     };
     use prost::Oneof;
 
@@ -110,5 +150,13 @@ pub mod pb_node_payload_envelope {
         TaskCancel(PbTaskCancel),
         #[prost(message, tag = "6")]
         Error(PbNodeError),
+        #[prost(message, tag = "7")]
+        SessionInfo(PbSessionInfo),
+        #[prost(message, tag = "8")]
+        CommandCatalog(PbCommandCatalog),
+        #[prost(message, tag = "9")]
+        TaskPullRequest(PbTaskPullRequest),
+        #[prost(message, tag = "10")]
+        TaskPullResponse(PbTaskPullResponse),
     }
 }

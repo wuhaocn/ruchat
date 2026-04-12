@@ -1,6 +1,10 @@
 use crate::auth::AuthConfig;
 use crate::db::Database;
 use axum::http::{HeaderMap, StatusCode};
+use ru_command_protocol::{
+    NodeSnapshot, ProtocolSnapshot, CONTROL_CAPABILITIES, CONTROL_PROTOCOL_VERSION,
+    CONTROL_TRANSPORT_STACK, MAX_RESULT_OUTPUT_BYTES, MAX_TASK_PULL_RESPONSE_ITEMS,
+};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -54,6 +58,10 @@ impl AppState {
 
     pub(crate) fn verify_admin_credentials(&self, username: &str, password: &str) -> bool {
         username == self.admin_username && password == self.admin_password
+    }
+
+    pub(crate) fn admin_actor(&self) -> String {
+        self.admin_username.clone()
     }
 
     pub(crate) fn create_admin_session(&self) -> String {
@@ -165,6 +173,50 @@ impl AppState {
             })?;
 
         Ok(format!("ws://{host}/ws/nodes/{node_id}"))
+    }
+
+    pub(crate) fn protocol_snapshot(&self) -> ProtocolSnapshot {
+        ProtocolSnapshot {
+            protocol_version: CONTROL_PROTOCOL_VERSION.to_string(),
+            transport_stack: CONTROL_TRANSPORT_STACK.to_string(),
+            heartbeat_interval_secs: self.heartbeat_interval_secs,
+            max_result_output_bytes: MAX_RESULT_OUTPUT_BYTES as u64,
+            max_task_pull_response_items: MAX_TASK_PULL_RESPONSE_ITEMS,
+            capabilities: CONTROL_CAPABILITIES
+                .iter()
+                .map(|item| (*item).to_string())
+                .collect(),
+        }
+    }
+
+    pub(crate) fn node_is_online(&self, node_id: &str) -> bool {
+        self.sessions
+            .lock()
+            .ok()
+            .map(|sessions| sessions.contains_key(node_id))
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn enrich_node_snapshot(&self, mut node: NodeSnapshot) -> NodeSnapshot {
+        if self.node_is_online(&node.node_id) {
+            node.online = true;
+            node.session_protocol_version = Some(CONTROL_PROTOCOL_VERSION.to_string());
+            node.session_transport_stack = Some(CONTROL_TRANSPORT_STACK.to_string());
+            node.session_heartbeat_interval_secs = Some(self.heartbeat_interval_secs);
+            node.session_capabilities = CONTROL_CAPABILITIES
+                .iter()
+                .map(|item| (*item).to_string())
+                .collect();
+        }
+
+        node
+    }
+
+    pub(crate) fn enrich_node_snapshots(&self, nodes: Vec<NodeSnapshot>) -> Vec<NodeSnapshot> {
+        nodes
+            .into_iter()
+            .map(|node| self.enrich_node_snapshot(node))
+            .collect()
     }
 }
 

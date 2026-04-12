@@ -39,7 +39,7 @@ impl AuthConfig {
         if expected == presented_token {
             Ok(())
         } else {
-            Err("invalid agent token")
+            Err("invalid node token")
         }
     }
 }

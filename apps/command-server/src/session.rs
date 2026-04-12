@@ -6,9 +6,10 @@ use ru_command_protocol::pb_mqtt_frame::Body as MqttFrameBody;
 use ru_command_protocol::pb_node_payload_envelope::Body as NodePayloadBody;
 use ru_command_protocol::{
     node_ack_topic, node_control_topic, node_hello_topic, node_result_topic, node_task_topic,
-    NodeRegistration, PbMqttConnAck, PbMqttConnect, PbMqttFrame, PbMqttPingReq, PbMqttPingResp,
-    PbMqttPublish, PbMqttSubAck, PbNodeError, PbNodePayloadEnvelope, PbTaskCancel,
-    SubmitTaskResultRequest,
+    CommandDescriptor, NodeRegistration, PbMqttConnAck, PbMqttConnect, PbMqttFrame, PbMqttPingReq,
+    PbMqttPingResp, PbMqttPublish, PbMqttSubAck, PbNodeError, PbNodePayloadEnvelope, PbSessionInfo,
+    PbTaskCancel, PbTaskPullRequest, PbTaskPullResponse, SessionEventKind, SubmitTaskResultRequest,
+    CONTROL_PROTOCOL_VERSION, MAX_RESULT_OUTPUT_BYTES, MAX_TASK_PULL_RESPONSE_ITEMS,
 };
 use std::collections::HashSet;
 use std::io;
@@ -32,6 +33,11 @@ pub(crate) async fn handle_node_socket(
     let connect = match receive_connect(&mut socket).await {
         Ok(connect) => connect,
         Err(error) => {
+            let _ = state.db.record_session_event(
+                &path_node_id,
+                SessionEventKind::ConnectRejected,
+                &error,
+            );
             let _ = socket
                 .send(WsMessage::Binary(
                     mqtt_connack(false, &error).encode_message(),
@@ -43,6 +49,11 @@ pub(crate) async fn handle_node_socket(
     };
 
     if connect.client_id != path_node_id {
+        let _ = state.db.record_session_event(
+            &path_node_id,
+            SessionEventKind::ConnectRejected,
+            "client_id mismatch between path and connect",
+        );
         let _ = socket
             .send(WsMessage::Binary(
                 mqtt_connack(false, "client_id mismatch between path and connect").encode_message(),
@@ -56,6 +67,9 @@ pub(crate) async fn handle_node_socket(
         .auth
         .verify_node_token(&path_node_id, &connect.auth_token)
     {
+        let _ = state
+            .db
+            .record_session_event(&path_node_id, SessionEventKind::AuthFailed, message);
         let _ = socket
             .send(WsMessage::Binary(
                 mqtt_connack(false, message).encode_message(),
@@ -75,6 +89,11 @@ pub(crate) async fn handle_node_socket(
 
     let (signal_tx, mut signal_rx) = mpsc::unbounded_channel::<SessionSignal>();
     state.insert_session(path_node_id.clone(), signal_tx);
+    let _ = state.db.record_session_event(
+        &path_node_id,
+        SessionEventKind::SessionOpened,
+        "mqtt connected",
+    );
 
     let mut subscriptions = HashSet::new();
     let mut registered = false;
@@ -165,6 +184,11 @@ pub(crate) async fn handle_node_socket(
     }
 
     state.remove_session(&path_node_id);
+    let _ = state.db.record_session_event(
+        &path_node_id,
+        SessionEventKind::SessionClosed,
+        "node session closed",
+    );
     let _ = state
         .db
         .requeue_incomplete_tasks(&path_node_id, "node session closed");
@@ -218,6 +242,9 @@ async fn handle_binary_message(
                 },
             )
             .await?;
+            if subscriptions.contains(&node_control_topic(node_id)) {
+                publish_session_info(socket, node_id, state.heartbeat_interval_secs).await?;
+            }
             try_dispatch_next_task(
                 state,
                 node_id,
@@ -274,33 +301,83 @@ async fn handle_publish(
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
 
     if publish.topic == node_hello_topic(node_id) {
-        let Some(NodePayloadBody::ClientHello(hello)) = payload.body else {
-            publish_error(socket, node_id, "hello topic requires client hello payload").await?;
-            return Ok(());
-        };
-        if hello.node_id != node_id {
-            publish_error(socket, node_id, "node_id mismatch in hello payload").await?;
-            return Ok(());
-        }
+        match payload.body {
+            Some(NodePayloadBody::ClientHello(hello)) => {
+                if hello.node_id != node_id {
+                    publish_error(socket, node_id, "node_id mismatch in hello payload").await?;
+                    return Ok(());
+                }
 
-        state
-            .db
-            .requeue_incomplete_tasks(node_id, "node re-registered")
-            .map_err(to_io_error)?;
-        state
-            .db
-            .register_node(NodeRegistration::from(hello))
-            .map_err(to_io_error)?;
-        *registered = true;
-        try_dispatch_next_task(
-            state,
-            node_id,
-            socket,
-            subscriptions,
-            *registered,
-            in_flight_task,
-        )
-        .await?;
+                state
+                    .db
+                    .requeue_incomplete_tasks(node_id, "node re-registered")
+                    .map_err(to_io_error)?;
+                state
+                    .db
+                    .register_node(NodeRegistration::from(hello))
+                    .map_err(to_io_error)?;
+                let _ = state.db.record_session_event(
+                    node_id,
+                    SessionEventKind::NodeRegistered,
+                    "client hello accepted",
+                );
+                *registered = true;
+                try_dispatch_next_task(
+                    state,
+                    node_id,
+                    socket,
+                    subscriptions,
+                    *registered,
+                    in_flight_task,
+                )
+                .await?;
+            }
+            Some(NodePayloadBody::CommandCatalog(catalog)) => {
+                let commands = catalog
+                    .commands
+                    .into_iter()
+                    .map(CommandDescriptor::from)
+                    .collect();
+                if state
+                    .db
+                    .update_node_commands(node_id, commands)
+                    .map_err(to_io_error)?
+                    .is_none()
+                {
+                    publish_error(
+                        socket,
+                        node_id,
+                        "command catalog received before registration",
+                    )
+                    .await?;
+                }
+            }
+            _ => {
+                publish_error(
+                    socket,
+                    node_id,
+                    "hello topic requires client hello or command catalog payload",
+                )
+                .await?;
+            }
+        }
+        return Ok(());
+    }
+
+    if publish.topic == node_control_topic(node_id) {
+        match payload.body {
+            Some(NodePayloadBody::TaskPullRequest(request)) => {
+                respond_to_task_pull(state, node_id, socket, *registered, in_flight_task, request)
+                    .await?;
+            }
+            Some(NodePayloadBody::Error(_))
+            | Some(NodePayloadBody::TaskCancel(_))
+            | Some(NodePayloadBody::SessionInfo(_))
+            | Some(NodePayloadBody::TaskPullResponse(_)) => {}
+            _ => {
+                publish_error(socket, node_id, "unsupported payload on control topic").await?;
+            }
+        }
         return Ok(());
     }
 
@@ -414,26 +491,41 @@ async fn try_dispatch_next_task(
         return Ok(());
     };
 
-    let payload = PbNodePayloadEnvelope {
-        body: Some(NodePayloadBody::TaskAssignment((&task).into())),
+    publish_task_assignment(socket, node_id, &task).await?;
+    *in_flight_task = Some(new_in_flight_task(&task));
+
+    Ok(())
+}
+
+async fn respond_to_task_pull(
+    state: &Arc<AppState>,
+    node_id: &str,
+    socket: &mut WebSocket,
+    registered: bool,
+    in_flight_task: &mut Option<InFlightTask>,
+    request: PbTaskPullRequest,
+) -> Result<(), io::Error> {
+    if request.node_id != node_id {
+        publish_error(socket, node_id, "node_id mismatch in task pull request").await?;
+        return Ok(());
+    }
+
+    if request.limit.min(MAX_TASK_PULL_RESPONSE_ITEMS) == 0
+        || !registered
+        || in_flight_task.is_some()
+    {
+        publish_task_pull_response(socket, node_id, Vec::new()).await?;
+        return Ok(());
+    }
+
+    let task = state.db.claim_task(node_id).map_err(to_io_error)?;
+    let ClaimTaskOutcome::Claimed(task) = task else {
+        publish_task_pull_response(socket, node_id, Vec::new()).await?;
+        return Ok(());
     };
-    send_mqtt_frame(
-        socket,
-        PbMqttFrame {
-            body: Some(MqttFrameBody::Publish(PbMqttPublish {
-                topic: node_task_topic(node_id),
-                payload: payload.encode_message(),
-            })),
-        },
-    )
-    .await?;
-    *in_flight_task = Some(InFlightTask {
-        task_id: task.task_id,
-        timeout_secs: task.timeout_secs,
-        dispatched_at_unix_secs: unix_now(),
-        cancel_requested: false,
-        ignore_result: false,
-    });
+
+    publish_task_pull_response(socket, node_id, vec![(&task).into()]).await?;
+    *in_flight_task = Some(new_in_flight_task(&task));
 
     Ok(())
 }
@@ -526,6 +618,85 @@ async fn send_task_cancel(
         body: Some(NodePayloadBody::TaskCancel(PbTaskCancel {
             task_id,
             reason,
+        })),
+    };
+    send_mqtt_frame(
+        socket,
+        PbMqttFrame {
+            body: Some(MqttFrameBody::Publish(PbMqttPublish {
+                topic: node_control_topic(node_id),
+                payload: payload.encode_message(),
+            })),
+        },
+    )
+    .await
+}
+
+async fn publish_task_assignment(
+    socket: &mut WebSocket,
+    node_id: &str,
+    task: &ru_command_protocol::PendingTask,
+) -> Result<(), io::Error> {
+    let payload = PbNodePayloadEnvelope {
+        body: Some(NodePayloadBody::TaskAssignment(task.into())),
+    };
+    send_mqtt_frame(
+        socket,
+        PbMqttFrame {
+            body: Some(MqttFrameBody::Publish(PbMqttPublish {
+                topic: node_task_topic(node_id),
+                payload: payload.encode_message(),
+            })),
+        },
+    )
+    .await
+}
+
+async fn publish_task_pull_response(
+    socket: &mut WebSocket,
+    node_id: &str,
+    tasks: Vec<ru_command_protocol::PbTaskAssignment>,
+) -> Result<(), io::Error> {
+    let payload = PbNodePayloadEnvelope {
+        body: Some(NodePayloadBody::TaskPullResponse(PbTaskPullResponse {
+            tasks,
+        })),
+    };
+    send_mqtt_frame(
+        socket,
+        PbMqttFrame {
+            body: Some(MqttFrameBody::Publish(PbMqttPublish {
+                topic: node_control_topic(node_id),
+                payload: payload.encode_message(),
+            })),
+        },
+    )
+    .await
+}
+
+fn new_in_flight_task(task: &ru_command_protocol::PendingTask) -> InFlightTask {
+    InFlightTask {
+        task_id: task.task_id,
+        timeout_secs: task.timeout_secs,
+        dispatched_at_unix_secs: unix_now(),
+        cancel_requested: false,
+        ignore_result: false,
+    }
+}
+
+async fn publish_session_info(
+    socket: &mut WebSocket,
+    node_id: &str,
+    heartbeat_interval_secs: u64,
+) -> Result<(), io::Error> {
+    let payload = PbNodePayloadEnvelope {
+        body: Some(NodePayloadBody::SessionInfo(PbSessionInfo {
+            session_id: format!("{node_id}-{}", unix_now()),
+            node_id: node_id.to_string(),
+            heartbeat_interval_secs,
+            max_result_output_bytes: MAX_RESULT_OUTPUT_BYTES as u64,
+            protocol_version: CONTROL_PROTOCOL_VERSION.to_string(),
+            server_unix_secs: unix_now(),
         })),
     };
     send_mqtt_frame(

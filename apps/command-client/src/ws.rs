@@ -5,8 +5,9 @@ use ru_command_protocol::pb_mqtt_frame::Body as MqttFrameBody;
 use ru_command_protocol::pb_node_payload_envelope::Body as NodePayloadBody;
 use ru_command_protocol::{
     node_ack_topic, node_control_topic, node_hello_topic, node_result_topic, node_task_topic,
-    BootstrapResponse, PbClientHello, PbMqttConnect, PbMqttFrame, PbMqttPingReq, PbMqttPingResp,
-    PbMqttPublish, PbMqttSubscribe, PbNodePayloadEnvelope, PbTaskAck, PbTaskCancel, PbTaskResult,
+    BootstrapResponse, PbClientHello, PbCommandCatalog, PbMqttConnect, PbMqttFrame, PbMqttPingReq,
+    PbMqttPingResp, PbMqttPublish, PbMqttSubscribe, PbNodePayloadEnvelope, PbSessionInfo,
+    PbTaskAck, PbTaskAssignment, PbTaskCancel, PbTaskPullRequest, PbTaskResult,
 };
 use std::io;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -57,11 +58,28 @@ pub(crate) async fn run_ws_session(
         node_hello_topic(&config.node_id),
         PbNodePayloadEnvelope {
             body: Some(NodePayloadBody::ClientHello(PbClientHello::from(
-                &config.registration(),
+                &config.hello_registration(),
             ))),
         },
     )
     .await?;
+
+    send_publish(
+        &mut socket,
+        node_hello_topic(&config.node_id),
+        PbNodePayloadEnvelope {
+            body: Some(NodePayloadBody::CommandCatalog(PbCommandCatalog {
+                commands: config
+                    .command_descriptors()
+                    .iter()
+                    .map(Into::into)
+                    .collect(),
+            })),
+        },
+    )
+    .await?;
+
+    request_task_pull(&mut socket, &config.node_id).await?;
 
     let mut heartbeat = tokio::time::interval(Duration::from_secs(
         bootstrap.heartbeat_interval_secs.max(1),
@@ -86,6 +104,7 @@ pub(crate) async fn run_ws_session(
                     let completed_task = running_task.take().expect("running task missing");
                     let result = completed_task.runner.finish().await;
                     publish_task_result(&mut socket, &config.node_id, finished_task_id, result).await?;
+                    request_task_pull(&mut socket, &config.node_id).await?;
                 }
             }
             message = socket.next() => {
@@ -165,41 +184,19 @@ async fn handle_binary_message(
                     let Some(NodePayloadBody::TaskAssignment(task)) = payload.body else {
                         return Ok(());
                     };
-                    if running_task.is_some() {
-                        eprintln!(
-                            "received task {} while another task is still running",
-                            task.task_id
-                        );
-                        return Ok(());
-                    }
-
-                    send_publish(
-                        socket,
-                        node_ack_topic(&config.node_id),
-                        PbNodePayloadEnvelope {
-                            body: Some(NodePayloadBody::TaskAck(PbTaskAck {
-                                task_id: task.task_id,
-                            })),
-                        },
-                    )
-                    .await?;
-
-                    match RunningCommand::start(config, &task.command_name, &task.args) {
-                        StartTaskOutcome::Started(runner) => {
-                            *running_task = Some(RunningTaskState {
-                                task_id: task.task_id,
-                                runner,
-                            });
-                        }
-                        StartTaskOutcome::Completed(result) => {
-                            publish_task_result(socket, &config.node_id, task.task_id, result)
-                                .await?;
-                        }
-                    }
+                    start_task_assignment(config, socket, running_task, task).await?;
                 }
                 topic if topic == node_control_topic(&config.node_id) => match payload.body {
                     Some(NodePayloadBody::Error(error)) => {
                         eprintln!("server error: {}", error.message);
+                    }
+                    Some(NodePayloadBody::SessionInfo(info)) => {
+                        handle_session_info(info);
+                    }
+                    Some(NodePayloadBody::TaskPullResponse(response)) => {
+                        if let Some(task) = response.tasks.into_iter().next() {
+                            start_task_assignment(config, socket, running_task, task).await?;
+                        }
                     }
                     Some(NodePayloadBody::TaskCancel(cancel)) => {
                         handle_task_cancel(running_task, cancel)?;
@@ -256,6 +253,56 @@ fn running_task_finished(
     Ok(task.runner.try_wait()?.map(|_| task.task_id))
 }
 
+async fn start_task_assignment(
+    config: &ClientConfig,
+    socket: &mut WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+    running_task: &mut Option<RunningTaskState>,
+    task: PbTaskAssignment,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if running_task.is_some() {
+        eprintln!(
+            "received task {} while another task is still running",
+            task.task_id
+        );
+        return Ok(());
+    }
+
+    send_publish(
+        socket,
+        node_ack_topic(&config.node_id),
+        PbNodePayloadEnvelope {
+            body: Some(NodePayloadBody::TaskAck(PbTaskAck {
+                task_id: task.task_id,
+            })),
+        },
+    )
+    .await?;
+
+    match RunningCommand::start(config, &task.command_name, &task.args) {
+        StartTaskOutcome::Started(runner) => {
+            *running_task = Some(RunningTaskState {
+                task_id: task.task_id,
+                runner,
+            });
+        }
+        StartTaskOutcome::Completed(result) => {
+            publish_task_result(socket, &config.node_id, task.task_id, result).await?;
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_session_info(info: PbSessionInfo) {
+    eprintln!(
+        "session info: node_id={}, protocol={}, heartbeat={}s, max_result_output_bytes={}",
+        info.node_id,
+        info.protocol_version,
+        info.heartbeat_interval_secs,
+        info.max_result_output_bytes
+    );
+}
+
 async fn publish_task_result(
     socket: &mut WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
     node_id: &str,
@@ -276,6 +323,23 @@ async fn publish_task_result(
                 error: result.error,
                 stdout_truncated: result.stdout_truncated,
                 stderr_truncated: result.stderr_truncated,
+            })),
+        },
+    )
+    .await
+}
+
+async fn request_task_pull(
+    socket: &mut WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+    node_id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    send_publish(
+        socket,
+        node_control_topic(node_id),
+        PbNodePayloadEnvelope {
+            body: Some(NodePayloadBody::TaskPullRequest(PbTaskPullRequest {
+                node_id: node_id.to_string(),
+                limit: 1,
             })),
         },
     )

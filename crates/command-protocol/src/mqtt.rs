@@ -1,5 +1,7 @@
 use prost::Message;
 
+// Wire schema source-of-truth also exists in proto/transport.proto.
+
 #[derive(Clone, PartialEq, Message)]
 pub struct PbMqttConnect {
     #[prost(string, tag = "1")]

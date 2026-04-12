@@ -15,9 +15,9 @@
 
 - `command-plane-server`：服务端，负责 HTTP bootstrap、WebSocket 会话、任务管理、后台控制台和 SQLite 持久化。
 - `command-plane-client`：部署在目标机器上的客户端，先通过 HTTP 获取地址，再通过 WebSocket 建立单一会话。
-- `command-plane-protocol`：客户端与服务端共享的数据协议，HTTP 控制面用 JSON，WebSocket 内部是 MQTT-like 语义 + Protobuf 载荷。
+- `command-plane-protocol`：客户端与服务端共享的数据协议，HTTP 控制面用 JSON，长连接通道按 `HTTP bootstrap -> WebSocket -> MQTT-like 帧 -> Protobuf 业务载荷` 分层。
 
-手工联调可直接参考 [doc/manual-e2e.md](/Users/wuhao/data/ai/ruchat/doc/manual-e2e.md)，日常使用说明可参考 [doc/practical-guide.md](/Users/wuhao/data/ai/ruchat/doc/practical-guide.md)，当前能力基线可参考 [doc/capability-baseline.md](/Users/wuhao/data/ai/ruchat/doc/capability-baseline.md)，也可以使用 [scripts/run-server-dev.sh](/Users/wuhao/data/ai/ruchat/scripts/run-server-dev.sh) 和 [scripts/run-client-dev.sh](/Users/wuhao/data/ai/ruchat/scripts/run-client-dev.sh)。
+手工联调可直接参考 [doc/manual-e2e.md](/Users/wuhao/data/ai/ruchat/doc/manual-e2e.md)，日常使用说明可参考 [doc/practical-guide.md](/Users/wuhao/data/ai/ruchat/doc/practical-guide.md)，长连接协议规范可参考 [doc/long-connection-spec.md](/Users/wuhao/data/ai/ruchat/doc/long-connection-spec.md)，当前能力基线可参考 [doc/capability-baseline.md](/Users/wuhao/data/ai/ruchat/doc/capability-baseline.md)，也可以使用 [scripts/run-server-dev.sh](/Users/wuhao/data/ai/ruchat/scripts/run-server-dev.sh) 和 [scripts/run-client-dev.sh](/Users/wuhao/data/ai/ruchat/scripts/run-client-dev.sh)。
 
 端口模型当前是：
 
@@ -30,10 +30,11 @@
 
 这套实现不是“服务端直接远程 shell 到客户端”，而是一个受控任务系统：
 
+- HTTP 只负责 bootstrap 和后台控制接口。
 - 客户端先通过 HTTP `bootstrap` 接口获取 `ws://` 地址。
-- 客户端随后通过 WebSocket 建立单一连接。
-- WebSocket 连接内部承载一层 MQTT-like 语义：`CONNECT / SUBSCRIBE / PUBLISH / PING`。
-- 业务载荷继续使用 Protobuf，放在 `PUBLISH.payload` 里。
+- 客户端随后通过 WebSocket 建立单一连接，WebSocket 只作为承载层。
+- WebSocket 连接内部承载一层 MQTT-like 生命周期语义：`CONNECT / CONNACK / SUBSCRIBE / SUBACK / PUBLISH / PING`。
+- 业务载荷继续使用 Protobuf，放在 `PUBLISH.payload` 里，负责 `SessionInfo / ClientHello / CommandCatalog / TaskAssignment / TaskResult` 等控制消息。
 - 服务端只能从客户端已声明的命令中选一个创建任务。
 - 服务端在长连接上直接下发任务，客户端执行完成后再通过同一个连接回传结果。
 
@@ -65,7 +66,7 @@ crates/
 
 - `apps/`：服务端与客户端可执行程序
 - `crates/`：共享协议 crate
-- `doc/`：实用文档，当前保留 `manual-e2e.md`、`practical-guide.md` 和 `capability-baseline.md`
+- `doc/`：实用文档，当前保留 `manual-e2e.md`、`practical-guide.md`、`long-connection-spec.md` 和 `capability-baseline.md`
 - `scripts/`：本地开发启动脚本
 
 ## 启动服务端
@@ -172,17 +173,37 @@ cargo run -p command-plane-client -- client-config.json
 
 客户端会先带 token 访问 `http://.../api/v1/bootstrap`，然后在 WebSocket `CONNECT` 帧里再次带上同一个 token。
 
-## MQTT 说明
+## 长连接协议说明
 
-- 这里的 MQTT 不是独立 broker/TCP 通道，而是 WebSocket 之上的一层消息语义。
+- 这里的 MQTT-like 不是独立 broker/TCP 通道，而是 WebSocket 之上的一层消息语义。
+- HTTP 负责把客户端引导到正确的 `ws_url`，后续长连接生命周期都走 WS 内的 MQTT-like 帧。
 - 客户端进入 WS 后先发送带鉴权信息的 `CONNECT`，再 `SUBSCRIBE` 自己的 topic，然后通过 `PUBLISH` 收发业务消息。
 - 心跳也走这层语义，连接两端都可以发 `PINGREQ`，对端返回 `PINGRESP`。
-- 当前内置的 topic 约定是 `nodes/{node_id}/hello`、`nodes/{node_id}/task`、`nodes/{node_id}/ack`、`nodes/{node_id}/result`、`nodes/{node_id}/control`。
+- 当前固定的 topic 约定是 `nodes/{node_id}/hello`、`nodes/{node_id}/task`、`nodes/{node_id}/ack`、`nodes/{node_id}/result`、`nodes/{node_id}/control`。
+- `nodes/{node_id}/hello` 承载 `ClientHello` 和 `CommandCatalog`。
+- `nodes/{node_id}/control` 承载 `SessionInfo`、`TaskPullRequest`、`TaskPullResponse`、`TaskCancel` 和错误消息。
 - `PUBLISH.payload` 中承载的是 Protobuf 业务消息。
+- 协议 schema 源文件在 [transport.proto](/Users/wuhao/data/ai/ruchat/crates/command-protocol/proto/transport.proto) 和 [control.proto](/Users/wuhao/data/ai/ruchat/crates/command-protocol/proto/control.proto)，当前 Rust 结构体在 [mqtt.rs](/Users/wuhao/data/ai/ruchat/crates/command-protocol/src/mqtt.rs) 与 [pb.rs](/Users/wuhao/data/ai/ruchat/crates/command-protocol/src/pb.rs) 中保持镜像，便于离线构建。
+
+当前最小会话顺序是：
+
+1. HTTP `POST /api/v1/bootstrap`
+2. WS `CONNECT / CONNACK`
+3. WS `SUBSCRIBE(task, control) / SUBACK`
+4. 服务端通过 `control` topic 下发 `SessionInfo`
+5. 客户端通过 `hello` topic 发送 `ClientHello`
+6. 客户端通过 `hello` topic 发送 `CommandCatalog`
+7. 服务端优先走 `task` topic 推送 `TaskAssignment`
+8. 客户端也可以在 `control` topic 发 `TaskPullRequest`，服务端返回 `TaskPullResponse` 作为补偿拉取路径
+
+`TaskPullRequest` 当前还有两个约束：
+
+- `node_id` 必须和当前 WS 会话绑定的 node 一致
+- 因为当前仍是单 node 单 in-flight 任务模型，`limit > 1` 也只会返回最多 1 条任务，`limit = 0` 则返回空结果
 
 ## 当前最小能力
 
-- 客户端上线后会注册自己和支持命令。
+- 客户端上线后会先注册主机信息，再单独上报支持命令。
 - 后台登录后可以查看在线客户端和命令列表。
 - 后台可以选择已声明命令创建任务。
 - 客户端执行后会回传 stdout/stderr、耗时和退出码。
@@ -207,9 +228,21 @@ curl -X POST http://127.0.0.1:18080/api/v1/bootstrap \
 {
   "node_id": "node-1",
   "ws_url": "ws://127.0.0.1:18080/ws/nodes/node-1",
-  "heartbeat_interval_secs": 15
+  "heartbeat_interval_secs": 15,
+  "protocol_version": "command-plane-control/v1alpha1",
+  "transport_stack": "http-bootstrap/ws+mqtt+protobuf",
+  "capabilities": [
+    "session_info",
+    "command_catalog",
+    "task_push",
+    "task_pull",
+    "task_cancel",
+    "single_inflight"
+  ]
 }
 ```
+
+这里的 `protocol_version / transport_stack / capabilities` 是服务端对当前控制面能力的静态声明，客户端和控制台都可以用它做兼容判断或运维展示。
 
 ### 2. 查看已注册客户端
 
@@ -219,7 +252,16 @@ curl http://127.0.0.1:18080/api/v1/nodes
 
 注意：`/api/v1/nodes`、`/api/v1/tasks` 这类管理接口现在要求先登录后台控制台并带上 `ru_admin_session` cookie；`/health`、`/api/v1/bootstrap`、`/ws/nodes/:node_id` 不受 admin 登录保护。
 
-客户端真正注册、订阅、任务接收和结果回传都发生在 WebSocket 二进制消息中。传输层帧定义见 [mqtt.rs](/Users/wuhao/data/ai/ruchat/crates/command-protocol/src/mqtt.rs) 里的 `PbMqttFrame`，业务载荷定义见 [pb.rs](/Users/wuhao/data/ai/ruchat/crates/command-protocol/src/pb.rs) 里的 `PbNodePayloadEnvelope` / `PbClientHello` / `PbTaskAssignment` / `PbTaskResult`。
+客户端真正注册、订阅、任务接收和结果回传都发生在 WebSocket 二进制消息中。传输层 schema 见 [transport.proto](/Users/wuhao/data/ai/ruchat/crates/command-protocol/proto/transport.proto)，业务层 schema 见 [control.proto](/Users/wuhao/data/ai/ruchat/crates/command-protocol/proto/control.proto)。
+
+如果想直接查看当前服务端暴露的协议能力，也可以访问：
+
+- `GET /api/v1/protocol`
+- `GET /api/v1/session-events`
+- 控制台 `http://127.0.0.1:18080/console/protocol`
+- 控制台 `http://127.0.0.1:18080/console/session-events`
+
+`/api/v1/session-events` 当前支持 `limit`、`node_id`、`kind` 三个查询参数，`kind` 可选值是 `connect_rejected`、`auth_failed`、`session_opened`、`node_registered`、`session_closed`。
 
 ### 3. 创建执行任务
 
@@ -234,7 +276,7 @@ curl -X POST http://127.0.0.1:18080/api/v1/tasks \
   }'
 ```
 
-任务创建后，如果对应客户端在线，服务端会通过当前 WebSocket 会话里的 `PUBLISH(topic=nodes/{node_id}/task)` 立即推送任务。客户端收到后会先回 `nodes/{node_id}/ack`，服务端再把任务状态切到 `running`。
+任务创建后，如果对应客户端在线，服务端会优先通过当前 WebSocket 会话里的 `PUBLISH(topic=nodes/{node_id}/task)` 立即推送任务。客户端收到后会先回 `nodes/{node_id}/ack`，服务端再把任务状态切到 `running`。如果连接刚恢复或需要补偿拉取，客户端也会在 `nodes/{node_id}/control` 上发送 `TaskPullRequest`，服务端回 `TaskPullResponse`。
 
 ### 4. 取消未开始任务
 
@@ -270,14 +312,14 @@ curl http://127.0.0.1:18080/api/v1/tasks/1
 - 当前后台控制台是服务端渲染的最小实现，适合验证闭环，不适合直接作为正式运维台。
 - 当前 MQTT-like 语义只实现了 node 控制场景需要的最小子集，不是完整 MQTT 协议实现。
 - WebSocket 内的业务载荷已切成 Protobuf，但 HTTP 控制面仍是 JSON。
-- 客户端执行命令时会一次性收集输出，超大输出暂未做流式限制。
+- 客户端执行命令时仍是任务结束后整块回传，不是流式输出；当前已对 stdout/stderr 做 64 KiB 截断保护。
 - 当前 timeout 仍然是服务端基于下发租约做自动重试，还没有升级成“先 cancel 再确认退出”的两阶段超时回收。
 - 当前还没有真正的 AI 调用入口，AI 只是在产品定位里属于下一层控制者。
 
 ## 后续建议
 
 - 先补真实联调和集成测试，确保“登录后台 -> 看到 node -> 下发命令 -> 收到结果”稳定可复现。
-- 为任务增加输出截断、任务详情页和更清楚的审计字段。
+- 继续补任务详情表达、审计字段和更细的控制台信息层级。
 - 增加签名、轮换和 mTLS，替换当前静态 token 模式。
 - 将 SQLite 数据访问从同步调用改成独立 worker 或连接池，降低阻塞影响。
 - 在服务端控制面稳定后，再增加 AI 调用层，由 AI 通过受控接口选择 node 和命令，而不是直接越过控制面。

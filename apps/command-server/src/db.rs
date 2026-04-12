@@ -1,6 +1,6 @@
 use ru_command_protocol::{
-    CreateTaskRequest, NodeRegistration, NodeSnapshot, PendingTask, SubmitTaskResultRequest,
-    TaskSnapshot, TaskStatus,
+    CommandDescriptor, CreateTaskRequest, NodeRegistration, NodeSnapshot, PendingTask,
+    SessionEvent, SessionEventKind, SubmitTaskResultRequest, TaskSnapshot, TaskStatus,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use std::error::Error;
@@ -35,6 +35,21 @@ pub enum CancelTaskOutcome {
     NotFound,
     NotCancelable,
     Canceled(TaskSnapshot),
+}
+
+#[derive(Debug, Clone)]
+pub struct TaskAudit {
+    pub source: String,
+    pub actor: Option<String>,
+}
+
+impl TaskAudit {
+    pub fn new(source: impl Into<String>, actor: Option<String>) -> Self {
+        Self {
+            source: source.into(),
+            actor,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -80,10 +95,14 @@ impl Database {
         Self::ensure_task_column(&connection, "dispatched_at_unix_secs", "INTEGER")?;
         Self::ensure_task_column(&connection, "acked_at_unix_secs", "INTEGER")?;
         Self::ensure_task_column(&connection, "timeout_secs", "INTEGER")?;
+        Self::ensure_task_column(&connection, "created_via", "TEXT")?;
+        Self::ensure_task_column(&connection, "created_by", "TEXT")?;
         Self::ensure_task_column(&connection, "retry_count", "INTEGER NOT NULL DEFAULT 0")?;
         Self::ensure_task_column(&connection, "retry_reason", "TEXT")?;
         Self::ensure_task_column(&connection, "canceled_at_unix_secs", "INTEGER")?;
         Self::ensure_task_column(&connection, "cancel_reason", "TEXT")?;
+        Self::ensure_task_column(&connection, "canceled_via", "TEXT")?;
+        Self::ensure_task_column(&connection, "canceled_by", "TEXT")?;
 
         Ok(Self {
             connection: Mutex::new(connection),
@@ -92,8 +111,21 @@ impl Database {
 
     pub fn register_node(&self, registration: NodeRegistration) -> Result<NodeSnapshot, DbError> {
         let now = unix_now();
-        let commands_json = serde_json::to_string(&registration.commands)?;
         let connection = self.connection.lock().map_err(|_| DbError::LockPoisoned)?;
+
+        let existing_commands_json: Option<String> = connection
+            .query_row(
+                "SELECT commands_json FROM nodes WHERE node_id = ?1",
+                params![&registration.node_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        let commands_json = if registration.commands.is_empty() {
+            existing_commands_json.unwrap_or_else(|| "[]".to_string())
+        } else {
+            serde_json::to_string(&registration.commands)?
+        };
 
         let registered_at_unix_secs: i64 = connection
             .query_row(
@@ -167,7 +199,36 @@ impl Database {
         self.get_node_inner(&connection, node_id)
     }
 
-    pub fn create_task(&self, request: CreateTaskRequest) -> Result<CreateTaskOutcome, DbError> {
+    pub fn update_node_commands(
+        &self,
+        node_id: &str,
+        commands: Vec<CommandDescriptor>,
+    ) -> Result<Option<NodeSnapshot>, DbError> {
+        let now = unix_now();
+        let commands_json = serde_json::to_string(&commands)?;
+        let connection = self.connection.lock().map_err(|_| DbError::LockPoisoned)?;
+        let updated = connection.execute(
+            "
+            UPDATE nodes
+            SET commands_json = ?1,
+                last_seen_unix_secs = ?2
+            WHERE node_id = ?3
+            ",
+            params![commands_json, now as i64, node_id],
+        )?;
+
+        if updated == 0 {
+            return Ok(None);
+        }
+
+        self.get_node_inner(&connection, node_id)
+    }
+
+    pub fn create_task(
+        &self,
+        request: CreateTaskRequest,
+        audit: TaskAudit,
+    ) -> Result<CreateTaskOutcome, DbError> {
         let now = unix_now();
         let connection = self.connection.lock().map_err(|_| DbError::LockPoisoned)?;
         let Some(node) = self.get_node_inner(&connection, &request.node_id)? else {
@@ -195,9 +256,11 @@ impl Database {
                 args_json,
                 status,
                 created_at_unix_secs,
+                created_via,
+                created_by,
                 timeout_secs,
                 retry_count
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0)
             ",
             params![
                 &request.node_id,
@@ -205,6 +268,8 @@ impl Database {
                 args_json,
                 task_status_to_str(TaskStatus::Queued),
                 now as i64,
+                audit.source,
+                audit.actor,
                 request.timeout_secs.map(|value| value as i64)
             ],
         )?;
@@ -215,6 +280,106 @@ impl Database {
             .ok_or_else(|| DbError::Data("task disappeared after insert".to_string()))?;
 
         Ok(CreateTaskOutcome::Created(task))
+    }
+
+    pub fn record_session_event(
+        &self,
+        node_id: &str,
+        kind: SessionEventKind,
+        message: impl Into<String>,
+    ) -> Result<SessionEvent, DbError> {
+        let created_at_unix_secs = unix_now();
+        let message = message.into();
+        let connection = self.connection.lock().map_err(|_| DbError::LockPoisoned)?;
+        connection.execute(
+            "
+            INSERT INTO session_events (
+                node_id,
+                event_kind,
+                message,
+                created_at_unix_secs
+            ) VALUES (?1, ?2, ?3, ?4)
+            ",
+            params![
+                node_id,
+                session_event_kind_to_str(kind),
+                &message,
+                created_at_unix_secs as i64
+            ],
+        )?;
+
+        Ok(SessionEvent {
+            event_id: connection.last_insert_rowid() as u64,
+            node_id: node_id.to_string(),
+            kind,
+            message,
+            created_at_unix_secs,
+        })
+    }
+
+    pub fn list_session_events_for_node(
+        &self,
+        node_id: &str,
+        limit: usize,
+    ) -> Result<Vec<SessionEvent>, DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::LockPoisoned)?;
+        let mut statement = connection.prepare(
+            "
+            SELECT
+                event_id,
+                node_id,
+                event_kind,
+                message,
+                created_at_unix_secs
+            FROM session_events
+            WHERE node_id = ?1
+            ORDER BY event_id DESC
+            LIMIT ?2
+            ",
+        )?;
+
+        let rows = statement.query_map(params![node_id, limit as i64], |row| {
+            self.read_session_event(row)
+        })?;
+        let mut events = Vec::new();
+        for row in rows {
+            events.push(row?);
+        }
+        Ok(events)
+    }
+
+    pub fn list_session_events(
+        &self,
+        node_id: Option<&str>,
+        kind: Option<SessionEventKind>,
+        limit: usize,
+    ) -> Result<Vec<SessionEvent>, DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::LockPoisoned)?;
+        let mut statement = connection.prepare(
+            "
+            SELECT
+                event_id,
+                node_id,
+                event_kind,
+                message,
+                created_at_unix_secs
+            FROM session_events
+            WHERE (?1 IS NULL OR node_id = ?1)
+              AND (?2 IS NULL OR event_kind = ?2)
+            ORDER BY event_id DESC
+            LIMIT ?3
+            ",
+        )?;
+
+        let kind = kind.map(session_event_kind_to_str);
+        let rows = statement.query_map(params![node_id, kind, limit as i64], |row| {
+            self.read_session_event(row)
+        })?;
+        let mut events = Vec::new();
+        for row in rows {
+            events.push(row?);
+        }
+        Ok(events)
     }
 
     fn create_schema(connection: &Connection) -> Result<(), DbError> {
@@ -237,6 +402,8 @@ impl Database {
                 args_json TEXT NOT NULL,
                 status TEXT NOT NULL,
                 created_at_unix_secs INTEGER NOT NULL,
+                created_via TEXT,
+                created_by TEXT,
                 dispatched_at_unix_secs INTEGER,
                 acked_at_unix_secs INTEGER,
                 started_at_unix_secs INTEGER,
@@ -246,6 +413,8 @@ impl Database {
                 retry_reason TEXT,
                 canceled_at_unix_secs INTEGER,
                 cancel_reason TEXT,
+                canceled_via TEXT,
+                canceled_by TEXT,
                 result_json TEXT,
                 FOREIGN KEY(node_id) REFERENCES nodes(node_id)
             );
@@ -253,6 +422,17 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_tasks_node_status_task_id
             ON tasks (node_id, status, task_id);
             DROP INDEX IF EXISTS idx_tasks_agent_status_task_id;
+
+            CREATE TABLE IF NOT EXISTS session_events (
+                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                node_id TEXT NOT NULL,
+                event_kind TEXT NOT NULL,
+                message TEXT NOT NULL,
+                created_at_unix_secs INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_session_events_node_event_id
+            ON session_events (node_id, event_id DESC);
             ",
         )?;
         Ok(())
@@ -375,6 +555,8 @@ impl Database {
                 args_json,
                 status,
                 created_at_unix_secs,
+                created_via,
+                created_by,
                 dispatched_at_unix_secs,
                 acked_at_unix_secs,
                 started_at_unix_secs,
@@ -384,6 +566,8 @@ impl Database {
                 retry_reason,
                 canceled_at_unix_secs,
                 cancel_reason,
+                canceled_via,
+                canceled_by,
                 result_json
             FROM tasks
             ORDER BY task_id
@@ -391,6 +575,45 @@ impl Database {
         )?;
 
         let rows = statement.query_map([], |row| self.read_task(row))?;
+        let mut tasks = Vec::new();
+        for row in rows {
+            tasks.push(row?);
+        }
+        Ok(tasks)
+    }
+
+    pub fn list_recent_tasks(&self, limit: usize) -> Result<Vec<TaskSnapshot>, DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::LockPoisoned)?;
+        let mut statement = connection.prepare(
+            "
+            SELECT
+                task_id,
+                node_id,
+                command_name,
+                args_json,
+                status,
+                created_at_unix_secs,
+                created_via,
+                created_by,
+                dispatched_at_unix_secs,
+                acked_at_unix_secs,
+                started_at_unix_secs,
+                finished_at_unix_secs,
+                timeout_secs,
+                retry_count,
+                retry_reason,
+                canceled_at_unix_secs,
+                cancel_reason,
+                canceled_via,
+                canceled_by,
+                result_json
+            FROM tasks
+            ORDER BY task_id DESC
+            LIMIT ?1
+            ",
+        )?;
+
+        let rows = statement.query_map(params![limit as i64], |row| self.read_task(row))?;
         let mut tasks = Vec::new();
         for row in rows {
             tasks.push(row?);
@@ -413,6 +636,8 @@ impl Database {
                 args_json,
                 status,
                 created_at_unix_secs,
+                created_via,
+                created_by,
                 dispatched_at_unix_secs,
                 acked_at_unix_secs,
                 started_at_unix_secs,
@@ -422,6 +647,8 @@ impl Database {
                 retry_reason,
                 canceled_at_unix_secs,
                 cancel_reason,
+                canceled_via,
+                canceled_by,
                 result_json
             FROM tasks
             WHERE node_id = ?1
@@ -452,9 +679,13 @@ impl Database {
             SET status = ?1,
                 dispatched_at_unix_secs = NULL,
                 acked_at_unix_secs = NULL,
-                started_at_unix_secs = NULL
-                ,retry_count = retry_count + 1
-                ,retry_reason = ?2
+                started_at_unix_secs = NULL,
+                canceled_at_unix_secs = NULL,
+                cancel_reason = NULL,
+                canceled_via = NULL,
+                canceled_by = NULL,
+                retry_count = retry_count + 1,
+                retry_reason = ?2
             WHERE node_id = ?3
               AND status IN (?4, ?5)
               AND finished_at_unix_secs IS NULL
@@ -545,6 +776,8 @@ impl Database {
                 finished_at_unix_secs = NULL,
                 canceled_at_unix_secs = NULL,
                 cancel_reason = NULL,
+                canceled_via = NULL,
+                canceled_by = NULL,
                 result_json = NULL
             WHERE task_id = ?3
             ",
@@ -612,6 +845,8 @@ impl Database {
                 finished_at_unix_secs = NULL,
                 canceled_at_unix_secs = NULL,
                 cancel_reason = NULL,
+                canceled_via = NULL,
+                canceled_by = NULL,
                 result_json = NULL,
                 retry_count = retry_count + 1,
                 retry_reason = ?2
@@ -709,6 +944,7 @@ impl Database {
         &self,
         task_id: u64,
         reason: Option<String>,
+        audit: TaskAudit,
     ) -> Result<CancelTaskOutcome, DbError> {
         let canceled_at = unix_now();
         let reason = reason.unwrap_or_else(|| "canceled by server".to_string());
@@ -740,13 +976,17 @@ impl Database {
             SET status = ?1,
                 finished_at_unix_secs = ?2,
                 canceled_at_unix_secs = ?2,
-                cancel_reason = ?3
-            WHERE task_id = ?4
+                cancel_reason = ?3,
+                canceled_via = ?4,
+                canceled_by = ?5
+            WHERE task_id = ?6
             ",
             params![
                 task_status_to_str(TaskStatus::Canceled),
                 canceled_at as i64,
                 &reason,
+                audit.source,
+                audit.actor,
                 task_id as i64
             ],
         )?;
@@ -798,6 +1038,8 @@ impl Database {
                 args_json,
                 status,
                 created_at_unix_secs,
+                created_via,
+                created_by,
                 dispatched_at_unix_secs,
                 acked_at_unix_secs,
                 started_at_unix_secs,
@@ -807,6 +1049,8 @@ impl Database {
                 retry_reason,
                 canceled_at_unix_secs,
                 cancel_reason,
+                canceled_via,
+                canceled_by,
                 result_json
             FROM tasks
             WHERE task_id = ?1
@@ -836,6 +1080,11 @@ impl Database {
             poll_interval_secs: row.get::<_, i64>(3)? as u64,
             registered_at_unix_secs: row.get::<_, i64>(4)? as u64,
             last_seen_unix_secs: row.get::<_, i64>(5)? as u64,
+            online: false,
+            session_protocol_version: None,
+            session_transport_stack: None,
+            session_heartbeat_interval_secs: None,
+            session_capabilities: Vec::new(),
             commands,
         })
     }
@@ -843,7 +1092,7 @@ impl Database {
     fn read_task(&self, row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskSnapshot> {
         let args_json: String = row.get(3)?;
         let status: String = row.get(4)?;
-        let result_json: Option<String> = row.get(15)?;
+        let result_json: Option<String> = row.get(19)?;
 
         let args = serde_json::from_str(&args_json).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
@@ -855,7 +1104,7 @@ impl Database {
         let result = match result_json {
             Some(value) => Some(serde_json::from_str(&value).map_err(|error| {
                 rusqlite::Error::FromSqlConversionFailure(
-                    15,
+                    19,
                     rusqlite::types::Type::Text,
                     Box::new(error),
                 )
@@ -876,16 +1125,37 @@ impl Database {
                 )
             })?,
             created_at_unix_secs: row.get::<_, i64>(5)? as u64,
-            dispatched_at_unix_secs: row.get::<_, Option<i64>>(6)?.map(|value| value as u64),
-            acked_at_unix_secs: row.get::<_, Option<i64>>(7)?.map(|value| value as u64),
-            started_at_unix_secs: row.get::<_, Option<i64>>(8)?.map(|value| value as u64),
-            finished_at_unix_secs: row.get::<_, Option<i64>>(9)?.map(|value| value as u64),
-            timeout_secs: row.get::<_, Option<i64>>(10)?.map(|value| value as u64),
-            retry_count: row.get::<_, i64>(11)? as u32,
-            retry_reason: row.get(12)?,
-            canceled_at_unix_secs: row.get::<_, Option<i64>>(13)?.map(|value| value as u64),
-            cancel_reason: row.get(14)?,
+            created_via: row.get(6)?,
+            created_by: row.get(7)?,
+            dispatched_at_unix_secs: row.get::<_, Option<i64>>(8)?.map(|value| value as u64),
+            acked_at_unix_secs: row.get::<_, Option<i64>>(9)?.map(|value| value as u64),
+            started_at_unix_secs: row.get::<_, Option<i64>>(10)?.map(|value| value as u64),
+            finished_at_unix_secs: row.get::<_, Option<i64>>(11)?.map(|value| value as u64),
+            timeout_secs: row.get::<_, Option<i64>>(12)?.map(|value| value as u64),
+            retry_count: row.get::<_, i64>(13)? as u32,
+            retry_reason: row.get(14)?,
+            canceled_at_unix_secs: row.get::<_, Option<i64>>(15)?.map(|value| value as u64),
+            cancel_reason: row.get(16)?,
+            canceled_via: row.get(17)?,
+            canceled_by: row.get(18)?,
             result,
+        })
+    }
+
+    fn read_session_event(&self, row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionEvent> {
+        let kind: String = row.get(2)?;
+        Ok(SessionEvent {
+            event_id: row.get::<_, i64>(0)? as u64,
+            node_id: row.get(1)?,
+            kind: session_event_kind_from_str(&kind).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    2,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?,
+            message: row.get(3)?,
+            created_at_unix_secs: row.get::<_, i64>(4)? as u64,
         })
     }
 
@@ -958,6 +1228,29 @@ fn task_status_from_str(value: &str) -> Result<TaskStatus, DbError> {
     }
 }
 
+fn session_event_kind_to_str(value: SessionEventKind) -> &'static str {
+    match value {
+        SessionEventKind::ConnectRejected => "connect_rejected",
+        SessionEventKind::AuthFailed => "auth_failed",
+        SessionEventKind::SessionOpened => "session_opened",
+        SessionEventKind::NodeRegistered => "node_registered",
+        SessionEventKind::SessionClosed => "session_closed",
+    }
+}
+
+fn session_event_kind_from_str(value: &str) -> Result<SessionEventKind, DbError> {
+    match value {
+        "connect_rejected" => Ok(SessionEventKind::ConnectRejected),
+        "auth_failed" => Ok(SessionEventKind::AuthFailed),
+        "session_opened" => Ok(SessionEventKind::SessionOpened),
+        "node_registered" => Ok(SessionEventKind::NodeRegistered),
+        "session_closed" => Ok(SessionEventKind::SessionClosed),
+        other => Err(DbError::Data(format!(
+            "unknown session event kind: {other}"
+        ))),
+    }
+}
+
 fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -969,9 +1262,11 @@ fn unix_now() -> u64 {
 mod tests {
     use super::{
         CancelTaskOutcome, ClaimTaskOutcome, CreateTaskOutcome, Database, SubmitTaskResultOutcome,
+        TaskAudit,
     };
     use ru_command_protocol::{
-        CommandDescriptor, ExecutionResult, NodeRegistration, SubmitTaskResultRequest, TaskStatus,
+        CommandDescriptor, ExecutionResult, NodeRegistration, SessionEventKind,
+        SubmitTaskResultRequest, TaskStatus,
     };
     use rusqlite::{params, Connection};
     use std::fs;
@@ -990,12 +1285,15 @@ mod tests {
             assert_eq!(node.node_id, "node-persist");
 
             let task = match database
-                .create_task(ru_command_protocol::CreateTaskRequest {
-                    node_id: "node-persist".to_string(),
-                    command_name: "echo".to_string(),
-                    args: vec!["hello".to_string()],
-                    timeout_secs: Some(30),
-                })
+                .create_task(
+                    ru_command_protocol::CreateTaskRequest {
+                        node_id: "node-persist".to_string(),
+                        command_name: "echo".to_string(),
+                        args: vec!["hello".to_string()],
+                        timeout_secs: Some(30),
+                    },
+                    sample_audit("console", "persist-test"),
+                )
                 .unwrap()
             {
                 CreateTaskOutcome::Created(task) => task,
@@ -1003,6 +1301,8 @@ mod tests {
             };
 
             assert_eq!(task.command_name, "echo");
+            assert_eq!(task.created_via.as_deref(), Some("console"));
+            assert_eq!(task.created_by.as_deref(), Some("persist-test"));
         }
 
         {
@@ -1016,6 +1316,8 @@ mod tests {
             assert_eq!(tasks[0].node_id, "node-persist");
             assert_eq!(tasks[0].args, vec!["hello".to_string()]);
             assert_eq!(tasks[0].timeout_secs, Some(30));
+            assert_eq!(tasks[0].created_via.as_deref(), Some("console"));
+            assert_eq!(tasks[0].created_by.as_deref(), Some("persist-test"));
         }
 
         cleanup_db_files(&db_path);
@@ -1030,12 +1332,15 @@ mod tests {
             .unwrap();
 
         let created_task = match database
-            .create_task(ru_command_protocol::CreateTaskRequest {
-                node_id: "node-flow".to_string(),
-                command_name: "echo".to_string(),
-                args: vec!["hello".to_string(), "sqlite".to_string()],
-                timeout_secs: Some(10),
-            })
+            .create_task(
+                ru_command_protocol::CreateTaskRequest {
+                    node_id: "node-flow".to_string(),
+                    command_name: "echo".to_string(),
+                    args: vec!["hello".to_string(), "sqlite".to_string()],
+                    timeout_secs: Some(10),
+                },
+                sample_audit("api", "flow-test"),
+            )
             .unwrap()
         {
             CreateTaskOutcome::Created(task) => task,
@@ -1099,12 +1404,15 @@ mod tests {
             .unwrap();
 
         let created_task = match database
-            .create_task(ru_command_protocol::CreateTaskRequest {
-                node_id: "node-retry".to_string(),
-                command_name: "echo".to_string(),
-                args: vec![],
-                timeout_secs: Some(5),
-            })
+            .create_task(
+                ru_command_protocol::CreateTaskRequest {
+                    node_id: "node-retry".to_string(),
+                    command_name: "echo".to_string(),
+                    args: vec![],
+                    timeout_secs: Some(5),
+                },
+                sample_audit("console", "retry-test"),
+            )
             .unwrap()
         {
             CreateTaskOutcome::Created(task) => task,
@@ -1127,7 +1435,11 @@ mod tests {
         );
 
         let canceled = match database
-            .cancel_task(created_task.task_id, Some("operator canceled".to_string()))
+            .cancel_task(
+                created_task.task_id,
+                Some("operator canceled".to_string()),
+                sample_audit("console", "retry-test"),
+            )
             .unwrap()
         {
             CancelTaskOutcome::Canceled(task) => task,
@@ -1135,6 +1447,36 @@ mod tests {
         };
         assert_eq!(canceled.status, TaskStatus::Canceled);
         assert_eq!(canceled.cancel_reason.as_deref(), Some("operator canceled"));
+        assert_eq!(canceled.canceled_via.as_deref(), Some("console"));
+        assert_eq!(canceled.canceled_by.as_deref(), Some("retry-test"));
+
+        cleanup_db_files(&db_path);
+    }
+
+    #[test]
+    fn preserves_existing_commands_when_hello_registration_has_none() {
+        let db_path = unique_db_path("preserve-commands");
+        let database = Database::open(db_path.to_str().unwrap()).unwrap();
+
+        let original = database
+            .register_node(sample_registration("node-preserve"))
+            .unwrap();
+        assert_eq!(original.commands.len(), 1);
+
+        let updated = database
+            .register_node(NodeRegistration {
+                node_id: "node-preserve".to_string(),
+                hostname: "new-host".to_string(),
+                platform: "new-platform".to_string(),
+                poll_interval_secs: 5,
+                commands: Vec::new(),
+            })
+            .unwrap();
+
+        assert_eq!(updated.hostname, "new-host");
+        assert_eq!(updated.platform, "new-platform");
+        assert_eq!(updated.commands.len(), 1);
+        assert_eq!(updated.commands[0].name, "echo");
 
         cleanup_db_files(&db_path);
     }
@@ -1240,6 +1582,62 @@ mod tests {
         cleanup_db_files(&db_path);
     }
 
+    #[test]
+    fn records_and_lists_session_events() {
+        let db_path = unique_db_path("session-events");
+        let database = Database::open(db_path.to_str().unwrap()).unwrap();
+        database
+            .register_node(sample_registration("node-events"))
+            .unwrap();
+
+        database
+            .record_session_event(
+                "node-events",
+                SessionEventKind::SessionOpened,
+                "mqtt connected",
+            )
+            .unwrap();
+        database
+            .record_session_event(
+                "node-events",
+                SessionEventKind::NodeRegistered,
+                "client hello accepted",
+            )
+            .unwrap();
+
+        let events = database
+            .list_session_events_for_node("node-events", 10)
+            .unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind, SessionEventKind::NodeRegistered);
+        assert_eq!(events[0].message, "client hello accepted");
+        assert_eq!(events[1].kind, SessionEventKind::SessionOpened);
+        assert_eq!(events[1].message, "mqtt connected");
+
+        let all_events = database.list_session_events(None, None, 10).unwrap();
+        assert_eq!(all_events.len(), 2);
+        assert_eq!(all_events[0].node_id, "node-events");
+        assert_eq!(all_events[0].kind, SessionEventKind::NodeRegistered);
+
+        let opened_events = database
+            .list_session_events(None, Some(SessionEventKind::SessionOpened), 10)
+            .unwrap();
+        assert_eq!(opened_events.len(), 1);
+        assert_eq!(opened_events[0].kind, SessionEventKind::SessionOpened);
+
+        let scoped_events = database
+            .list_session_events(
+                Some("node-events"),
+                Some(SessionEventKind::NodeRegistered),
+                10,
+            )
+            .unwrap();
+        assert_eq!(scoped_events.len(), 1);
+        assert_eq!(scoped_events[0].message, "client hello accepted");
+
+        cleanup_db_files(&db_path);
+    }
+
     fn sample_registration(node_id: &str) -> NodeRegistration {
         NodeRegistration {
             node_id: node_id.to_string(),
@@ -1253,6 +1651,10 @@ mod tests {
                 allow_extra_args: true,
             }],
         }
+    }
+
+    fn sample_audit(source: &str, actor: &str) -> TaskAudit {
+        TaskAudit::new(source, Some(actor.to_string()))
     }
 
     fn unique_db_path(prefix: &str) -> PathBuf {
