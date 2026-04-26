@@ -17,7 +17,7 @@
 - `command-plane-client`：部署在目标机器上的客户端，先通过 HTTP 获取地址，再通过 WebSocket 建立单一会话。
 - `command-plane-protocol`：客户端与服务端共享的数据协议，HTTP 控制面用 JSON，长连接通道按 `HTTP bootstrap -> WebSocket -> MQTT-like 帧 -> Protobuf 业务载荷` 分层。
 
-手工联调可直接参考 [doc/manual-e2e.md](/Users/wuhao/data/ai/ruchat/doc/manual-e2e.md)，日常使用说明可参考 [doc/practical-guide.md](/Users/wuhao/data/ai/ruchat/doc/practical-guide.md)，长连接协议规范可参考 [doc/long-connection-spec.md](/Users/wuhao/data/ai/ruchat/doc/long-connection-spec.md)，当前能力基线可参考 [doc/capability-baseline.md](/Users/wuhao/data/ai/ruchat/doc/capability-baseline.md)，也可以使用 [scripts/run-server-dev.sh](/Users/wuhao/data/ai/ruchat/scripts/run-server-dev.sh) 和 [scripts/run-client-dev.sh](/Users/wuhao/data/ai/ruchat/scripts/run-client-dev.sh)。
+手工联调可直接参考 [doc/manual-e2e.md](/Users/wuhao/data/ai/ruchat/doc/manual-e2e.md)，日常使用说明可参考 [doc/practical-guide.md](/Users/wuhao/data/ai/ruchat/doc/practical-guide.md)，长连接协议规范可参考 [doc/long-connection-spec.md](/Users/wuhao/data/ai/ruchat/doc/long-connection-spec.md)，当前能力基线可参考 [doc/capability-baseline.md](/Users/wuhao/data/ai/ruchat/doc/capability-baseline.md)，后续执行路线可参考 [doc/execution-roadmap.md](/Users/wuhao/data/ai/ruchat/doc/execution-roadmap.md)，也可以使用 [scripts/run-server-dev.sh](/Users/wuhao/data/ai/ruchat/scripts/run-server-dev.sh) 和 [scripts/run-client-dev.sh](/Users/wuhao/data/ai/ruchat/scripts/run-client-dev.sh)。
 
 端口模型当前是：
 
@@ -66,7 +66,7 @@ crates/
 
 - `apps/`：服务端与客户端可执行程序
 - `crates/`：共享协议 crate
-- `doc/`：实用文档，当前保留 `manual-e2e.md`、`practical-guide.md`、`long-connection-spec.md` 和 `capability-baseline.md`
+- `doc/`：实用文档，当前保留 `manual-e2e.md`、`practical-guide.md`、`long-connection-spec.md`、`capability-baseline.md` 和 `execution-roadmap.md`
 - `scripts/`：本地开发启动脚本
 
 ## 启动服务端
